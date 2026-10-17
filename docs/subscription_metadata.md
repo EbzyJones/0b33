@@ -13,6 +13,7 @@ operations never affect financial state (balances, statuses, charges).
 | Max keys per subscription | 10    |
 | Max key length (bytes)    | 32    |
 | Max value length (bytes)  | 256   |
+| Allowed characters        | UTF-8, excluding null bytes (`\0`) |
 
 These limits are enforced on-chain to prevent storage bloat.
 
@@ -40,6 +41,10 @@ if the key does not exist. Emits `MetadataDeletedEvent`.
 
 Read a metadata value. Returns `Error::NotFound` if the key does not exist.
 No authorization required (read-only).
+
+Keys and values must be valid UTF-8 and must not contain null bytes (`\0`).
+Null bytes are valid UTF-8 but are rejected because downstream systems may
+treat them as C-style string terminators. Violations return `Error::InvalidInput`.
 
 ### `list_metadata_keys(subscription_id) -> Vec<String>`
 
@@ -131,6 +136,7 @@ off-chain ed25519) without ambiguity.
 | MetadataKeyLimitReached  | 1023 | Adding a new key would exceed the 10-key cap |
 | MetadataKeyTooLong       | 1024 | Key is empty or exceeds 32 bytes             |
 | MetadataValueTooLong     | 1025 | Value exceeds 256 bytes                      |
+| InvalidInput             | 3002 | Key or value contains a null byte (`\0`)     |
 | Forbidden                | 403  | Caller is not subscriber or merchant         |
 | NotActive                | 1002 | Subscription is cancelled (for set only)     |
 | NotFound                 | 404  | Key or subscription does not exist           |
