@@ -132,6 +132,13 @@ use soroban_sdk::{contracttype, Address, Env, Vec};
 /// (aligned with [`list_subscriptions_by_subscriber`]).
 pub const MAX_SUBSCRIPTION_LIST_PAGE: u32 = 100;
 
+/// Maximum offset that [`get_subscriptions_by_merchant_paginated`] will serve.
+///
+/// This bounds total enumeration across chained pages, not just the work in a
+/// single call. Once the cursor reaches this depth, the query returns an empty
+/// terminal page.
+pub const MAX_MERCHANT_CURSOR_DEPTH: u32 = 1_000;
+
 /// Hard upper bound on the `limit` parameter for [`list_subscriptions_by_subscriber`].
 ///
 /// Requests with `limit > MAX_QUERY_RESULTS` are rejected with
@@ -288,6 +295,10 @@ pub fn get_merchant_subscription_count(env: &Env, merchant: Address) -> u32 {
 /// - `next_cursor`: Offset to use for the next page (if more results exist)
 /// - `total`: Total number of subscriptions for this merchant
 ///
+/// Cursor traversal is capped at [`MAX_MERCHANT_CURSOR_DEPTH`] index entries.
+/// The page is truncated at that boundary, and requests at or beyond it return
+/// an empty terminal page (a tombstone) with `next_cursor == None`.
+///
 /// # Errors
 /// - `InvalidInput` if limit is 0 or exceeds `MAX_SUBSCRIPTION_LIST_PAGE`
 ///
@@ -318,7 +329,7 @@ pub fn get_subscriptions_by_merchant_paginated(
     let total = ids.len();
 
     let start = cursor.unwrap_or(0);
-    if start >= total {
+    if start >= total || start >= MAX_MERCHANT_CURSOR_DEPTH {
         return Ok(SubscriptionsMerchantPage {
             subscriptions: Vec::new(env),
             next_cursor: None,
@@ -326,10 +337,17 @@ pub fn get_subscriptions_by_merchant_paginated(
         });
     }
 
-    let end = start.saturating_add(limit).min(total);
-    let subscriptions = read_merchant_page(env, &ids, start, limit, reverse);
+    let end = start
+        .saturating_add(limit)
+        .min(total)
+        .min(MAX_MERCHANT_CURSOR_DEPTH);
+    let subscriptions = read_merchant_page(env, &ids, start, end - start, reverse);
 
-    let next_cursor = if end < total { Some(end) } else { None };
+    let next_cursor = if end < total && end < MAX_MERCHANT_CURSOR_DEPTH {
+        Some(end)
+    } else {
+        None
+    };
 
     Ok(SubscriptionsMerchantPage {
         subscriptions,

@@ -674,7 +674,8 @@ pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
 pub use queries::{
     compute_next_charge_info, generate_reconciliation_proof, get_contract_reconciliation_summary,
     get_token_reconciliation, query_prepaid_balances_paginated, MAX_PREPAID_SCAN_DEPTH,
-    MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIST_PAGE, MAX_TOKEN_SUMMARIES_PER_PAGE,
+    MAX_MERCHANT_CURSOR_DEPTH, MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIST_PAGE,
+    MAX_TOKEN_SUMMARIES_PER_PAGE,
 };
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
@@ -3170,7 +3171,9 @@ impl SubscriptionVault {
     /// (`None` requests the first page). Pass `reverse = true` to page through
     /// the merchant's subscriptions in reverse-chronological (newest-first)
     /// order. Cursors are direction-specific, so replay one with the same
-    /// `reverse` value that produced it.
+    /// `reverse` value that produced it. Traversal stops after
+    /// `MAX_MERCHANT_CURSOR_DEPTH` index entries and returns an empty terminal
+    /// page for cursors at or beyond that depth.
     pub fn list_subscriptions_by_merchant(
         env: Env,
         merchant: Address,
