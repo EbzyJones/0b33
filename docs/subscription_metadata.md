@@ -13,6 +13,7 @@ operations never affect financial state (balances, statuses, charges).
 | Max keys per subscription | 10    |
 | Max key length (bytes)    | 32    |
 | Max value length (bytes)  | 256   |
+| Forbidden byte            | `\0` (null byte) |
 
 These limits are enforced on-chain to prevent storage bloat.
 
@@ -23,6 +24,14 @@ or delete metadata. Unauthorized callers receive `Error::Forbidden (403)`.
 
 Setting metadata is blocked on **Cancelled** subscriptions (`Error::NotActive`).
 Deleting metadata is allowed on cancelled subscriptions to permit cleanup.
+
+## Allowed Character Set
+
+Keys and values are UTF-8 strings, but **null bytes (`\0`, U+0000) are rejected**
+even though they are valid UTF-8. Downstream systems commonly treat metadata as
+C-style null-terminated strings, so an embedded null byte can silently truncate
+or corrupt values. Both `set_metadata` and `set_metadata_signed` reject any key
+or value containing `\0` with `Error::InvalidInput`.
 
 ## Entrypoints
 
@@ -131,6 +140,7 @@ off-chain ed25519) without ambiguity.
 | MetadataKeyLimitReached  | 1023 | Adding a new key would exceed the 10-key cap |
 | MetadataKeyTooLong       | 1024 | Key is empty or exceeds 32 bytes             |
 | MetadataValueTooLong     | 1025 | Value exceeds 256 bytes                      |
+| InvalidInput             | 3002 | Key or value contains a null byte (`\0`)     |
 | Forbidden                | 403  | Caller is not subscriber or merchant         |
 | NotActive                | 1002 | Subscription is cancelled (for set only)     |
 | NotFound                 | 404  | Key or subscription does not exist           |
@@ -149,6 +159,7 @@ and each value <= 256 bytes. Worst-case per subscription: ~3 KB.
 
 - Prefer short ASCII keys (e.g. `invoice_id`, `external_ref`) so they stay within the 32-byte key limit and remain easy to query in indexers.
 - Values should be opaque identifiers or tags, not structured blobs; keep under 256 bytes so updates stay cheap.
+- Avoid null bytes (`\0`) in keys and values; they are rejected on-chain and can break C-style string consumers.
 - Treat keys as case-sensitive; normalize casing off-chain to avoid duplicate-looking keys (`INV` vs `inv`).
 - After deleting optional keys, you may re-add up to the 10-key cap; updates to an existing key do not consume a new slot.
 
@@ -187,6 +198,7 @@ The signed off-chain path (`set_metadata_signed`) preserves the same security gu
 | Cross-domain replay (signed → admin batch/rotate) | Domain tag `3` is part of the storage key; admin domains are 0/1 | `Error::NonceAlreadyUsed` |
 | Signer is neither subscriber nor merchant | `Address::from_account(pubkey)` compared to `sub.subscriber` / `sub.merchant` | `Error::Forbidden` (1002) |
 | Empty / whitespace key or value | `validation::reject_empty_string` ABI guard runs before crypto call | `Error::InvalidInput` |
+| Null byte (`\0`) in key or value | `validation::reject_null_bytes` guard runs before crypto call | `Error::InvalidInput` (3002) |
 | Key-cap overflow (> 10 keys per subscription) | Same per-subscription 10-key cap as the on-chain path | `Error::MetadataKeyLimitReached` (6005) |
 | Counter overflow (`u64::MAX`) | `checked_add` in `nonce::check_and_advance` returns `Err` instead of wrapping | `Error::Overflow` (5005) |
 | Unknown `subscription_id` | `get_subscription` returns `NotFound` before any crypto or storage write | `Error::NotFound` (2001) |

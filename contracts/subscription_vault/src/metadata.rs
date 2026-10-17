@@ -445,6 +445,19 @@ fn validate_utf8_string(s: &String, _field_name: &str) -> Result<(), Error> {
         return Err(Error::InvalidInput);
     }
 
+    // Reject null bytes (issue #300). `\0` is valid UTF-8 but breaks
+    // downstream consumers that treat metadata as C-style NUL-terminated
+    // strings, silently truncating values or corrupting indexer output.
+    //
+    // Allowed character set (documented contract):
+    //   * any valid UTF-8 scalar value (multi-byte sequences permitted);
+    //   * control characters U+0000..=U+001F are rejected, except TAB
+    //     (U+0009), LF (U+000A) and CR (U+000D);
+    //   * at least one printable (>= U+0020) non-whitespace character is
+    //     required.
+    // NUL (U+0000) is a control character and is therefore rejected by the
+    // control-character check below.
+    //
     // Validate the raw bytes with Rust's standard UTF-8 decoder (issue #149 /
     // #189) rather than a manual byte-range check, so valid multi-byte
     // sequences (CJK, emoji, accented Latin, ...) are accepted.
@@ -452,6 +465,13 @@ fn validate_utf8_string(s: &String, _field_name: &str) -> Result<(), Error> {
     let mut raw = vec![0u8; len];
     s.copy_into_slice(&mut raw);
     let text = core::str::from_utf8(&raw).map_err(|_| Error::InvalidInput)?;
+
+    // Explicit null-byte rejection (issue #300) — checked before the general
+    // control-character scan so the intent is unambiguous and independent of
+    // the byte-range logic below.
+    if text.as_bytes().contains(&0u8) {
+        return Err(Error::InvalidInput);
+    }
 
     // Reject control characters (except tab/newline/CR) and require at least
     // one printable, non-whitespace character.
@@ -509,6 +529,27 @@ mod utf8_validation_tests {
         let env = Env::default();
         let spaces = String::from_str(&env, "   ");
         assert!(validate_utf8_string(&spaces, "metadata value").is_err());
+    }
+
+    #[test]
+    fn rejects_null_byte_in_values() {
+        let env = Env::default();
+        let value = String::from_str(&env, "abc\0def");
+        assert!(validate_utf8_string(&value, "metadata value").is_err());
+    }
+
+    #[test]
+    fn rejects_null_byte_in_keys() {
+        let env = Env::default();
+        let key = String::from_str(&env, "ke\0y");
+        assert!(validate_utf8_string(&key, "metadata key").is_err());
+    }
+
+    #[test]
+    fn rejects_leading_null_byte() {
+        let env = Env::default();
+        let value = String::from_str(&env, "\0payload");
+        assert!(validate_utf8_string(&value, "metadata value").is_err());
     }
 }
 
