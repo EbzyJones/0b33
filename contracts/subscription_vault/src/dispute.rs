@@ -123,7 +123,7 @@ pub fn do_open_dispute(
             amount,
             evidence_hash,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::DISPUTE_OPENED_EVENT_SCHEMA_VERSION,
             token: sub.token.clone(),
         },
     );
@@ -169,7 +169,7 @@ pub fn do_respond_dispute(
             subscription_id: dispute.subscription_id,
             admin_evidence_hash: evidence_hash,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::DISPUTE_RESPONDED_EVENT_SCHEMA_VERSION,
             token,
         },
     );
@@ -318,7 +318,7 @@ pub fn do_resolve_dispute(
             subscription_id: dispute.subscription_id,
             resolution,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::DISPUTE_RESOLVED_EVENT_SCHEMA_VERSION,
             resolved_to: if resolution == DisputeStatus::ResolvedToMerchant {
                 ResolutionTarget::Merchant
             } else {
@@ -419,7 +419,7 @@ pub fn do_claim_cancellation_escrow(
             subscriber: escrow.subscriber.clone(),
             amount: escrow.amount,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -522,7 +522,7 @@ pub fn do_lodge_escrow_dispute(
             dispute_id,
             amount: escrow.amount,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -537,7 +537,7 @@ pub fn do_lodge_escrow_dispute(
             amount: escrow.amount,
             evidence_hash: None,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::DISPUTE_OPENED_EVENT_SCHEMA_VERSION,
             token: escrow.token.clone(),
         },
     );

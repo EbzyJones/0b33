@@ -7,15 +7,35 @@ use soroban_sdk::{
     contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
 };
 
-/// Current schema version for contract events.
+/// Schema version for event types that have not had a schema-specific change
+/// since version 2 added the field.
+pub const BASE_EVENT_SCHEMA_VERSION: u32 = 2;
+
+/// Latest event schema version across all event types.
 ///
-/// Version `6` appends `token: Address` to dispute events. Version `5`
-/// appended `resolved_to: ResolutionTarget` to [`DisputeResolvedEvent`].
-/// Version `4` appended `initiator_role: RecoveryInitiatorRole` to
-/// [`RecoveryEvent`] and [`SubscriberWithdrawalEvent`]. New fields are
-/// appended after `schema_version` to preserve existing positional prefixes
-/// for indexers.
+/// Kept for compatibility; new consumers should use the version constant for
+/// the specific event type.
+#[deprecated(note = "Use the schema version constant for the specific event type")]
 pub const EVENT_SCHEMA_VERSION: u32 = 6;
+
+pub const SPLIT_CHARGE_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const NONCE_CONSUMED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const DISCOUNT_APPLIED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const CHARGE_FAILURE_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const SUBSCRIPTION_CHARGE_FAILED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const SUBSCRIPTION_CANCELLED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const GRACE_PERIOD_ENTERED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const PROTOCOL_FEE_CHARGED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const FEE_CONVERTED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const SUBSCRIPTION_AUTO_PAUSED_EVENT_SCHEMA_VERSION: u32 = 3;
+pub const RECOVERY_EVENT_SCHEMA_VERSION: u32 = 4;
+pub const SUBSCRIBER_WITHDRAWAL_EVENT_SCHEMA_VERSION: u32 = 4;
+pub const DISPUTE_OPENED_EVENT_SCHEMA_VERSION: u32 = 6;
+pub const DISPUTE_RESPONDED_EVENT_SCHEMA_VERSION: u32 = 6;
+pub const DISPUTE_RESOLVED_EVENT_SCHEMA_VERSION: u32 = 6;
 
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;

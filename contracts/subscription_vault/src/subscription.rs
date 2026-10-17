@@ -463,7 +463,7 @@ fn emit_rate_limit_tripped(env: &Env, subscriber: &Address) {
     let event_data = RateLimitTrippedEvent {
         subscriber: subscriber.clone(),
         timestamp: env.ledger().timestamp(),
-        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
     };
     
     env.events().publish(topics, event_data);
@@ -601,7 +601,7 @@ pub fn do_create_subscription_with_token(
                 active_count: subscriber_active_count,
                 cap: subscriber_cap,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         return Err(Error::MaxConcurrentSubscriptionsReached);
@@ -736,7 +736,7 @@ pub fn do_create_subscription_with_token(
             expires_at,
             expires_at_ledger,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -775,7 +775,7 @@ pub fn do_create_subscription_with_token(
                 inviter: inviter_addr.clone(),
                 subscriber: subscriber.clone(),
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
     }
@@ -837,7 +837,7 @@ pub fn do_deposit_funds(
                     subscription_id,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -876,7 +876,7 @@ pub fn do_deposit_funds(
             amount,
             new_balance: sub.prepaid_balance,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -896,7 +896,7 @@ pub fn do_deposit_funds(
                 prepaid_balance: sub.prepaid_balance,
                 required_amount: sub.amount,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
 
@@ -909,7 +909,7 @@ pub fn do_deposit_funds(
                 authorizer: sub.subscriber.clone(),
                 previous_status: SubscriptionStatus::Paused,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
     }
@@ -1026,7 +1026,7 @@ pub fn do_grace_buyout(
             charge_amount,
             premium_paid: premium,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1052,7 +1052,7 @@ pub fn do_grace_buyout(
                 env.crypto().sha256(&salt_input).into()
             },
             batch_nonce: crate::admin::current_batch_nonce(env),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1066,7 +1066,7 @@ pub fn do_grace_buyout(
             authorizer: subscriber,
             previous_status: SubscriptionStatus::GracePeriod,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1104,7 +1104,7 @@ pub fn do_cancel_subscription(
                     subscription_id,
                     timestamp: env.ledger().timestamp(),
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -1206,7 +1206,7 @@ fn apply_cancellation(
                 amount: refund_amount,
                 released_at,
                 timestamp: now,
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
     }
@@ -1251,7 +1251,7 @@ fn apply_cancellation(
             refund_amount,
             timestamp: env.ledger().timestamp(),
             batch_nonce: crate::admin::current_batch_nonce(env),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::SUBSCRIPTION_CANCELLED_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1327,7 +1327,7 @@ pub fn do_schedule_cancel(
                     subscription_id,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -1419,7 +1419,7 @@ pub fn do_set_subscription_expiration_ledger(
             previous_expires_at_ledger: previous,
             authorizer,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1544,7 +1544,7 @@ pub fn do_set_auto_renew(
             enabled,
             authorizer,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1584,7 +1584,7 @@ pub fn do_pause_subscription(
                     subscription_id,
                     timestamp: env.ledger().timestamp(),
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -1629,7 +1629,7 @@ fn apply_pause(
             subscription_id,
             paused_by: authorizer,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1668,7 +1668,7 @@ pub fn do_resume_subscription(
                     subscription_id,
                     timestamp: env.ledger().timestamp(),
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -1717,7 +1717,7 @@ pub fn do_resume_subscription(
             authorizer,
             previous_status,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1754,7 +1754,7 @@ pub(crate) fn resume_after_blocklist_removal(
             authorizer,
             previous_status,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -1830,7 +1830,7 @@ fn bulk_pause_one(
                 subscription_id,
                 timestamp: env.ledger().timestamp(),
                 batch_nonce: crate::admin::current_batch_nonce(env),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
             },
         );
         return bulk_failed(subscription_id, Error::SubscriptionExpired);
@@ -1873,7 +1873,7 @@ fn bulk_cancel_one(
                 subscription_id,
                 timestamp: env.ledger().timestamp(),
                 batch_nonce: crate::admin::current_batch_nonce(env),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
             },
         );
         return bulk_failed(subscription_id, Error::SubscriptionExpired);
@@ -1971,7 +1971,7 @@ pub fn do_bulk_pause_subscriptions(
             failed,
             nonce,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -2026,7 +2026,7 @@ pub fn do_bulk_cancel_subscriptions(
             failed,
             nonce,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -2172,7 +2172,7 @@ fn bulk_deposit_one(
             amount,
             new_balance,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -2191,7 +2191,7 @@ fn bulk_deposit_one(
                 prepaid_balance: new_balance,
                 required_amount: sub.amount,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
     }
@@ -2271,7 +2271,7 @@ pub fn do_bulk_deposit_funds(
             total_amount,
             nonce,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -2320,7 +2320,7 @@ pub fn do_charge_one_off(
                     subscription_id,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -2356,7 +2356,7 @@ pub fn do_charge_one_off(
                         lifetime_charged: sub.lifetime_charged,
                         timestamp: now,
                         batch_nonce: crate::admin::current_batch_nonce(env),
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
                     },
                 );
             }
@@ -2387,7 +2387,7 @@ pub fn do_charge_one_off(
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
                 },
             );
             return Err(Error::LifetimeCapReached);
@@ -2462,7 +2462,7 @@ pub fn do_charge_one_off(
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: env.ledger().timestamp(),
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -2488,7 +2488,7 @@ pub fn do_charge_one_off(
             amount,
             remaining_balance: sub.prepaid_balance,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -2550,7 +2550,7 @@ pub fn do_request_emergency_withdraw(
             amount: sub.prepaid_balance,
             cooldown_started_at: now,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -2614,7 +2614,7 @@ pub fn do_finalize_emergency_withdraw(
             token: token_addr,
             amount: amount_to_refund,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::SUBSCRIBER_WITHDRAWAL_EVENT_SCHEMA_VERSION,
             // `subscriber.require_auth()` + the `subscriber == sub.subscriber`
             // check above already pinned this call to the subscriber path.
             initiator_role: crate::types::RecoveryInitiatorRole::Subscriber,
@@ -2658,7 +2658,7 @@ pub fn do_cleanup_subscription(
             crate::types::SubscriptionArchivedEvent {
                 subscription_id,
                 timestamp: now,
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::SUBSCRIBER_WITHDRAWAL_EVENT_SCHEMA_VERSION,
             },
         );
     }
@@ -2774,7 +2774,7 @@ pub fn do_withdraw_subscriber_funds(
                 subscriber: subscriber.clone(),
                 amount: amount_to_refund,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::SUBSCRIBER_WITHDRAWAL_EVENT_SCHEMA_VERSION,
             },
         );
     }
@@ -2787,7 +2787,7 @@ pub fn do_withdraw_subscriber_funds(
             token: token_addr,
             amount: amount_to_refund,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::SUBSCRIBER_WITHDRAWAL_EVENT_SCHEMA_VERSION,
             // `subscriber.require_auth()` + the `subscriber == sub.subscriber`
             // check above already pinned this call to the subscriber path.
             initiator_role: crate::types::RecoveryInitiatorRole::Subscriber,
@@ -2851,7 +2851,7 @@ pub fn do_grant_delegated_payer(
             expires_at,
             max_amount,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -2886,7 +2886,7 @@ pub fn do_revoke_delegated_payer(
             subscriber,
             payer,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -2969,7 +2969,7 @@ pub fn do_deposit_funds_on_behalf(
                     subscription_id,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -3005,7 +3005,7 @@ pub fn do_deposit_funds_on_behalf(
             amount,
             new_balance: sub.prepaid_balance,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3026,7 +3026,7 @@ pub fn do_deposit_funds_on_behalf(
                 prepaid_balance: sub.prepaid_balance,
                 required_amount: sub.amount,
                 timestamp: now,
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
 
@@ -3039,7 +3039,7 @@ pub fn do_deposit_funds_on_behalf(
                 authorizer: sub.subscriber.clone(),
                 previous_status: SubscriptionStatus::Paused,
                 timestamp: now,
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
     }
@@ -3103,7 +3103,7 @@ pub fn do_partial_refund(
             token: sub.token.clone(),
             amount,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3186,7 +3186,7 @@ pub fn do_set_global_cap_default(
             admin,
             cap: cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -3218,7 +3218,7 @@ pub fn do_set_merchant_cap_default(
             admin: merchant,
             cap: cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -3261,7 +3261,7 @@ pub fn do_update_subscription_cap(
             admin: admin_addr,
             cap: new_cap.unwrap_or(0),
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -3320,7 +3320,7 @@ pub fn do_create_plan_template(
             interval: interval_seconds,
             usage_enabled,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3376,7 +3376,7 @@ pub fn do_create_plan_template_with_token(
             interval: interval_seconds,
             usage_enabled,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3419,7 +3419,7 @@ pub fn do_create_subscription_from_plan(
                 active_count: subscriber_active_count,
                 cap: subscriber_cap,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         return Err(Error::MaxConcurrentSubscriptionsReached);
@@ -3514,7 +3514,7 @@ pub fn do_create_subscription_from_plan(
             expires_at: None,
             expires_at_ledger: None,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3590,7 +3590,7 @@ pub fn do_update_plan_template(
             version: new_version,
             merchant,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3624,7 +3624,7 @@ pub fn do_disable_plan_template(
             plan_template_id,
             merchant,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3713,7 +3713,7 @@ pub fn do_migrate_subscription_to_plan(
             merchant: new_plan.merchant,
             subscriber,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3744,7 +3744,7 @@ pub fn do_set_plan_max_active_subs(
             merchant,
             max_active,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3799,7 +3799,7 @@ pub fn do_set_merchant_max_subs(
             merchant,
             max_subs,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3876,7 +3876,7 @@ pub fn do_configure_usage_limits(
             burst_min_interval_secs,
             usage_cap_units,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -3910,7 +3910,7 @@ pub fn do_initiate_transfer(
                     subscription_id,
                     timestamp: env.ledger().timestamp(),
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
                 },
             );
         }
@@ -3942,7 +3942,7 @@ pub fn do_initiate_transfer(
             to,
             expires_at,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -4012,7 +4012,7 @@ pub fn do_accept_transfer(
             from: intent.from,
             to,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -4044,7 +4044,7 @@ pub fn do_veto_transfer(
             subscription_id,
             merchant,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 

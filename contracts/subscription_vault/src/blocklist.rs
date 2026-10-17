@@ -71,7 +71,7 @@ pub fn do_add_to_blocklist(
         BlocklistAddedEvent {
             subscriber,
             reason: reason_str,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -146,7 +146,7 @@ pub fn do_remove_from_blocklist(
         (Symbol::new(env, "blocklist_removed"), subscriber.clone()),
         BlocklistRemovedEvent {
             subscriber,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 

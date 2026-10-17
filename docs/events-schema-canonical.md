@@ -27,15 +27,23 @@ env.events().publish(
 
 ## Schema Versioning Policy
 
-`EVENT_SCHEMA_VERSION` is currently `6`. Version `1` is the historical event payload layout
-without an explicit schema version field. Version `2` appends `schema_version: u32` to every event
-data struct. Version `3` appends `batch_nonce: Option<u64>` to charge-related events and
-`NonceConsumedEvent`, after the existing schema-v2 fields. Version `4` appends
-`initiator_role: RecoveryInitiatorRole` to `RecoveryEvent` and `SubscriberWithdrawalEvent`,
-after the existing schema-v3 fields. Version `5` appends
-`resolved_to: ResolutionTarget` to `DisputeResolvedEvent`, after `schema_version`.
-Version `6` appends `token: Address` to the dispute event payloads after the
-existing schema-v5 fields.
+Event versions are tracked independently for each event type. Version `1` is the historical
+event payload layout without an explicit schema version field. Version `2` adds
+`schema_version: u32` to every event data struct; unchanged event types remain at version `2`.
+Only an event whose own payload changes advances:
+
+| Event types | Current version | Schema change |
+| --- | ---: | --- |
+| `SplitChargeEvent`, `NonceConsumedEvent`, `DiscountAppliedEvent`, `SubscriptionChargedEvent`, `ChargeFailureEvent`, `SubscriptionChargeFailedEvent`, `SubscriptionCancelledEvent`, `GracePeriodEnteredEvent`, `SubscriptionExpiredEvent`, `LifetimeCapReachedEvent`, `ProtocolFeeChargedEvent`, `FeeConvertedEvent`, `SubscriptionAutoPausedEvent` | 3 | Append `batch_nonce: Option<u64>` |
+| `RecoveryEvent`, `SubscriberWithdrawalEvent` | 4 | Append `initiator_role: RecoveryInitiatorRole` |
+| `DisputeOpenedEvent`, `DisputeRespondedEvent` | 6 | Append `token: Address` |
+| `DisputeResolvedEvent` | 6 | Append `resolved_to: ResolutionTarget` in version 5, then `token: Address` in version 6 |
+
+`EVENT_SCHEMA_VERSION` remains as a deprecated compatibility constant for the maximum version
+currently used. Consumers must inspect the individual event's `schema_version`, not compare it to
+that global maximum. New event types start at version `2`, and subsequent schema changes increment
+only that event type's version. Fields remain append-only to preserve existing positional prefixes
+for indexers.
 
 Indexers should treat the fields listed for each event below as the canonical positional prefix.
 The `schema_version` field is present on every event and is intentionally not repeated in each

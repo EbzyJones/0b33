@@ -13,7 +13,7 @@
 
 use crate::types::{
     DataKey, Error, Proposal, ProposalCancelledEvent, ProposalExecutedEvent, ProposalKind,
-    ProposalSubmittedEvent, ProposalVotedEvent, VoteLockedEvent, EVENT_SCHEMA_VERSION,
+    ProposalSubmittedEvent, ProposalVotedEvent, VoteLockedEvent, BASE_EVENT_SCHEMA_VERSION,
 };
 use soroban_sdk::{Address, Env, Map, String, Symbol, Vec};
 
@@ -161,7 +161,7 @@ pub fn do_submit_proposal(
             quorum_bps,
             eta,
             timestamp: now,
-            schema_version: EVENT_SCHEMA_VERSION,
+            schema_version: BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -218,7 +218,7 @@ pub fn do_vote_proposal(env: &Env, proposal_id: u64, voted_yes: bool, nonce: u64
                 guardian: guardian.clone(),
                 eta: proposal.eta,
                 timestamp: now,
-                schema_version: EVENT_SCHEMA_VERSION,
+                schema_version: BASE_EVENT_SCHEMA_VERSION,
             },
         );
         return Err(Error::InvalidInput);
@@ -239,7 +239,7 @@ pub fn do_vote_proposal(env: &Env, proposal_id: u64, voted_yes: bool, nonce: u64
             voted_yes,
             guardian_weight,
             timestamp: now,
-            schema_version: EVENT_SCHEMA_VERSION,
+            schema_version: BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -384,7 +384,7 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
             votes_against,
             total_weight,
             timestamp: now,
-            schema_version: EVENT_SCHEMA_VERSION,
+            schema_version: BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -417,7 +417,7 @@ pub fn do_cancel_proposal(env: &Env, proposal_id: u64, reason: String) -> Result
             proposal_id,
             reason,
             timestamp: env.ledger().timestamp(),
-            schema_version: EVENT_SCHEMA_VERSION,
+            schema_version: BASE_EVENT_SCHEMA_VERSION,
         },
     );
 

@@ -71,10 +71,12 @@ pub use safe_math::*;
 pub use subscription::next_charge_time;
 #[cfg(any(kani, feature = "kani_harness"))]
 pub use nonce::compute_next_nonce;
+#[allow(deprecated)]
 pub use types::{
     CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowOpenedEvent,
     CancellationEscrowReleasedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent,
-    DisputeRespondedEvent, DisputeStatus, DisputeWindowUpdatedEvent, Error, Proposal, ProposalCancelledEvent,
+    DisputeRespondedEvent, DisputeStatus, DisputeWindowUpdatedEvent, Error, Proposal,
+    ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
     ProtocolFeeConfiguredEvent, ResolutionTarget, EVENT_SCHEMA_VERSION,
 };
@@ -479,7 +481,7 @@ pub mod oracle {
                 fixed_numerator,
                 fixed_denominator,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -555,7 +557,7 @@ pub mod oracle {
             age,
             healthy,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         };
 
         env.events()
@@ -594,7 +596,7 @@ pub mod operator {
                 admin,
                 operator,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -609,7 +611,7 @@ pub mod operator {
             crate::types::OperatorRemovedEvent {
                 admin,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -716,6 +718,16 @@ pub use types::{
     MAX_METADATA_VALUE_LENGTH, OP_AUTO_RENEWAL, OP_BILLING_PAUSE, OP_CHARGE, OP_REFUND,
     OP_WITHDRAW, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
     SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    BASE_EVENT_SCHEMA_VERSION, CHARGE_FAILURE_EVENT_SCHEMA_VERSION,
+    DISCOUNT_APPLIED_EVENT_SCHEMA_VERSION, DISPUTE_OPENED_EVENT_SCHEMA_VERSION,
+    DISPUTE_RESOLVED_EVENT_SCHEMA_VERSION, DISPUTE_RESPONDED_EVENT_SCHEMA_VERSION,
+    FEE_CONVERTED_EVENT_SCHEMA_VERSION, GRACE_PERIOD_ENTERED_EVENT_SCHEMA_VERSION,
+    LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION, NONCE_CONSUMED_EVENT_SCHEMA_VERSION,
+    PROTOCOL_FEE_CHARGED_EVENT_SCHEMA_VERSION, RECOVERY_EVENT_SCHEMA_VERSION,
+    SPLIT_CHARGE_EVENT_SCHEMA_VERSION, SUBSCRIBER_WITHDRAWAL_EVENT_SCHEMA_VERSION,
+    SUBSCRIPTION_AUTO_PAUSED_EVENT_SCHEMA_VERSION, SUBSCRIPTION_CANCELLED_EVENT_SCHEMA_VERSION,
+    SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION, SUBSCRIPTION_CHARGE_FAILED_EVENT_SCHEMA_VERSION,
+    SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
 };
 
 /// Maximum number of subscription IDs accepted by a single batch entrypoint.
@@ -1207,7 +1219,7 @@ impl SubscriptionVault {
                 admin,
                 state: true,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -1241,7 +1253,7 @@ impl SubscriptionVault {
                 admin,
                 state: false,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -1299,7 +1311,7 @@ impl SubscriptionVault {
                 limit: 1,
                 exported: 1,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(SubscriptionSummary {
@@ -1372,7 +1384,7 @@ impl SubscriptionVault {
                 limit,
                 exported: out.len(),
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(out)
@@ -1592,7 +1604,7 @@ impl SubscriptionVault {
                 expires_at,
                 expires_at_ledger,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(sub_id)
@@ -1665,7 +1677,7 @@ impl SubscriptionVault {
                 expires_at,
                 expires_at_ledger: None,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
 
@@ -1776,7 +1788,7 @@ impl SubscriptionVault {
                 expires_at,
                 expires_at_ledger,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(sub_id)
@@ -1802,7 +1814,7 @@ impl SubscriptionVault {
                 amount,
                 new_balance: sub.prepaid_balance,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -2157,7 +2169,7 @@ impl SubscriptionVault {
                 refund_amount: sub.prepaid_balance,
                 timestamp: env.ledger().timestamp(),
                 batch_nonce: admin::current_batch_nonce(&env),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::SUBSCRIPTION_CANCELLED_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -2275,7 +2287,7 @@ impl SubscriptionVault {
                 subscription_id,
                 paused_by: authorizer,
                 timestamp,
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -2324,7 +2336,7 @@ impl SubscriptionVault {
                 authorizer,
                 previous_status: old_sub.status,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -2524,7 +2536,7 @@ impl SubscriptionVault {
                 amount,
                 remaining_balance: new_balance,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(())
@@ -3287,7 +3299,7 @@ impl SubscriptionVault {
                 aggregate_total_amount: aggregate.total_amount,
                 aggregate_oldest_period_start: aggregate.oldest_period_start,
                 aggregate_newest_period_end: aggregate.newest_period_end,
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
             },
         );
         Ok(summary)

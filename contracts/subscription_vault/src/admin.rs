@@ -140,7 +140,7 @@ pub fn enforce_config_cooldown(env: &Env, key_label: &str) -> Result<u64, Error>
             key_label: String::from_str(env, key_label),
             prev_ts,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -346,7 +346,7 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
             old_min_topup,
             new_min_topup: min_topup,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -401,7 +401,7 @@ pub(crate) fn apply_dispute_window_secs(env: &Env, window_secs: u64) -> Result<(
             old_window_secs,
             new_window_secs: window_secs,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -750,7 +750,7 @@ pub fn do_rotate_admin(
             old_admin: current_admin,
             new_admin,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -828,7 +828,7 @@ pub fn do_recover_stranded_funds(
         amount: recovered_amount,
         reason,
         timestamp: env.ledger().timestamp(),
-        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        schema_version: crate::types::RECOVERY_EVENT_SCHEMA_VERSION,
         // `require_admin_auth` above already pinned this call to the admin
         // path, so the role is emitted rather than derived from caller input.
         initiator_role: RecoveryInitiatorRole::Admin,
@@ -906,7 +906,7 @@ pub fn queue_treasury_change(
             fee_bps,
             effective_at,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -937,7 +937,7 @@ pub fn execute_treasury_change(env: &Env, admin: Address) -> Result<(), Error> {
             fee_bps: pending.new_fee_bps,
             effective_at: pending.effective_at,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -999,7 +999,7 @@ pub fn set_fee_token(
             admin,
             fee_token,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -1422,7 +1422,7 @@ pub fn migrate_config_to_persistent(env: &Env, admin: Address) -> Result<(), Err
             from_version: stored_version,
             to_version: 3,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1574,7 +1574,7 @@ pub fn do_migrate(
             from_version: stored_version,
             to_version: binary_version,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
         },
     );
 
