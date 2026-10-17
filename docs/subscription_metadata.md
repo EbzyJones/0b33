@@ -11,10 +11,13 @@ operations never affect financial state (balances, statuses, charges).
 | Constraint            | Value |
 |-----------------------|-------|
 | Max keys per subscription | 10    |
-| Max key length (bytes)    | 32    |
+| Max key length (bytes, UTF-8 encoded) | 32 |
 | Max value length (bytes)  | 256   |
 
-These limits are enforced on-chain to prevent storage bloat.
+These limits are enforced on-chain to prevent storage bloat. Length limits are
+measured in **bytes of the UTF-8 encoding**, not in visible characters: a key
+with multi-byte Unicode characters may contain fewer than 32 characters while
+still hitting the 32-byte cap.
 
 ## Authorization
 
@@ -129,7 +132,7 @@ off-chain ed25519) without ambiguity.
 | Error                    | Code | Condition                                    |
 |--------------------------|------|----------------------------------------------|
 | MetadataKeyLimitReached  | 1023 | Adding a new key would exceed the 10-key cap |
-| MetadataKeyTooLong       | 1024 | Key is empty or exceeds 32 bytes             |
+| MetadataKeyTooLong       | 1024 | Key is empty or exceeds 32 bytes (UTF-8)     |
 | MetadataValueTooLong     | 1025 | Value exceeds 256 bytes                      |
 | Forbidden                | 403  | Caller is not subscriber or merchant         |
 | NotActive                | 1002 | Subscription is cancelled (for set only)     |
@@ -143,11 +146,12 @@ Metadata is stored in instance storage using composite keys:
 - **Values**: `(Symbol("mv"), subscription_id: u32, key: String)` -> `String`
 
 Storage is bounded: at most 10 keys per subscription, with each key <= 32 bytes
-and each value <= 256 bytes. Worst-case per subscription: ~3 KB.
+(UTF-8 encoded) and each value <= 256 bytes (UTF-8 encoded). Worst-case per
+subscription: ~3 KB.
 
 ## Schema recommendations (off-chain)
 
-- Prefer short ASCII keys (e.g. `invoice_id`, `external_ref`) so they stay within the 32-byte key limit and remain easy to query in indexers.
+- Prefer short ASCII keys (e.g. `invoice_id`, `external_ref`) so they stay within the 32-byte key limit and remain easy to query in indexers. Note the limit is 32 **bytes** of UTF-8, so non-ASCII keys consume more than one byte per character.
 - Values should be opaque identifiers or tags, not structured blobs; keep under 256 bytes so updates stay cheap.
 - Treat keys as case-sensitive; normalize casing off-chain to avoid duplicate-looking keys (`INV` vs `inv`).
 - After deleting optional keys, you may re-add up to the 10-key cap; updates to an existing key do not consume a new slot.
