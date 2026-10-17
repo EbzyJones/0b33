@@ -33,11 +33,10 @@
 //! | Key cap reached on 11th new key        | `key_cap_reached`                                 |
 //! | Chain id embedded in signed message    | `chain_id_mismatch_panics`                        |
 //! | Signer pubkey not in sub set => 403    | `non_party_signer_rejected` (signature mismatch) |
-//! | Key at 32 bytes accepted               | `key_at_max_length_accepted`                      |
-//! | Multi-byte key near byte limit         | `multibyte_key_near_byte_limit`                   |
-//! | Multi-byte key over byte limit rejected| `multibyte_key_over_byte_limit_rejected`          |
 //! | Replay across (sub, merchant) singers  | `subscriber_and_merchant_nonces_independent`      |
 //! | Cross-subscription replay rejected     | `cross_subscription_replay_rejected`              |
+//! | Multi-byte key at byte limit accepted  | `multibyte_key_at_byte_limit_accepted`            |
+//! | Multi-byte key over byte limit rejected| `multibyte_key_over_byte_limit_rejected`          |
 //!
 //! Target coverage: \u2265 95 % of the signed-update code paths, plus the
 //! negative paths that document how each attack is rejected.
@@ -1067,9 +1066,6 @@ fn replace_in_place_at_limit_succeeds() {
 }
 
 /// A key whose length equals MAX_METADATA_KEY_LENGTH (32 chars) must be accepted.
-///
-/// Note: `MAX_METADATA_KEY_LENGTH` is enforced in **bytes** (UTF-8 encoded),
-/// not visible characters. This test uses ASCII so bytes == chars.
 #[test]
 fn key_at_max_length_accepted() {
     let (env, client, _token, _admin) = setup();
@@ -1084,28 +1080,40 @@ fn key_at_max_length_accepted() {
     );
 }
 
-/// A multi-byte UTF-8 key whose **byte** length is exactly
-/// `MAX_METADATA_KEY_LENGTH` must be accepted, even though it has fewer
-/// visible characters. This pins down the documented semantics: the limit
-/// is on UTF-8 bytes, not on `chars()`.
+/// A value whose length equals MAX_METADATA_VALUE_LENGTH (256 chars) must be accepted.
 #[test]
-fn multibyte_key_near_byte_limit() {
+fn value_at_max_length_accepted() {
     let (env, client, _token, _admin) = setup();
     let (sub_id, subscriber, _merchant) = create_subscription(&env, &client, &client.address);
 
-    // 'é' is 2 bytes in UTF-8, so 16 of them == 32 bytes == the limit.
-    let key_str = "é".repeat(crate::MAX_METADATA_KEY_LENGTH as usize / 2);
+    let val = String::from_str(&env, &"v".repeat(crate::MAX_METADATA_VALUE_LENGTH as usize));
+    client.set_metadata(&sub_id, &subscriber, &String::from_str(&env, "k"), &val);
+
     assert_eq!(
-        key_str.len(),
-        crate::MAX_METADATA_KEY_LENGTH as usize,
-        "test setup: key must be exactly MAX_METADATA_KEY_LENGTH bytes"
+        client.get_metadata(&sub_id, &String::from_str(&env, "k")),
+        val
     );
-    assert!(
-        key_str.chars().count() < crate::MAX_METADATA_KEY_LENGTH as usize,
-        "test setup: multi-byte key must have fewer chars than bytes"
+}
+
+/// A key whose UTF-8 encoded length equals MAX_METADATA_KEY_LENGTH (32
+/// bytes) must be accepted, even when it consists of multi-byte characters.
+///
+/// The limit is enforced on the raw byte representation (UTF-8 encoded),
+/// not on the number of visible characters. A 2-byte character such as
+/// 'é' (U+00E9) repeated 16 times is exactly 32 bytes and must fit.
+#[test]
+fn multibyte_key_at_byte_limit_accepted() {
+    let (env, client, _token, _admin) = setup();
+    let (sub_id, subscriber, _merchant) = create_subscription(&env, &client, &client.address);
+
+    // 'é' is 2 bytes in UTF-8; 16 of them = 32 bytes = MAX_METADATA_KEY_LENGTH.
+    let key = String::from_str(&env, &"é".repeat(crate::MAX_METADATA_KEY_LENGTH as usize / 2));
+    assert_eq!(
+        key.to_string().as_bytes().len(),
+        crate::MAX_METADATA_KEY_LENGTH as usize,
+        "test key must be exactly MAX_METADATA_KEY_LENGTH bytes"
     );
 
-    let key = String::from_str(&env, &key_str);
     client.set_metadata(&sub_id, &subscriber, &key, &String::from_str(&env, "v"));
 
     assert_eq!(
@@ -1114,20 +1122,21 @@ fn multibyte_key_near_byte_limit() {
     );
 }
 
-/// A multi-byte UTF-8 key that has fewer than `MAX_METADATA_KEY_LENGTH`
-/// visible characters but **more** than `MAX_METADATA_KEY_LENGTH` bytes
-/// must be rejected — confirming the limit is byte-based.
+/// A multi-byte key whose UTF-8 encoded length exceeds
+/// MAX_METADATA_KEY_LENGTH (32 bytes) must be rejected with
+/// `MetadataKeyTooLong`, even though its visible character count is below
+/// 32. This documents that the limit is measured in bytes, not characters.
 #[test]
 fn multibyte_key_over_byte_limit_rejected() {
     let (env, client, _token, _admin) = setup();
     let (sub_id, subscriber, _merchant) = create_subscription(&env, &client, &client.address);
 
-    // 17 'é' chars == 34 bytes > 32, even though 17 < 32 chars.
-    let key_str = "é".repeat(crate::MAX_METADATA_KEY_LENGTH as usize / 2 + 1);
-    assert!(key_str.len() > crate::MAX_METADATA_KEY_LENGTH as usize);
-    assert!(key_str.chars().count() < crate::MAX_METADATA_KEY_LENGTH as usize);
+    // 'é' is 2 bytes in UTF-8; 17 of them = 34 bytes, over the 32-byte cap
+    // while still being only 17 visible characters.
+    let key = String::from_str(&env, &"é".repeat(17));
+    assert_eq!(key.to_string().as_bytes().len(), 34);
+    assert!(key.to_string().chars().count() < crate::MAX_METADATA_KEY_LENGTH as usize);
 
-    let key = String::from_str(&env, &key_str);
     let res = client.try_set_metadata(
         &sub_id,
         &subscriber,
@@ -1135,23 +1144,6 @@ fn multibyte_key_over_byte_limit_rejected() {
         &String::from_str(&env, "v"),
     );
     assert_eq!(res, Err(Ok(crate::Error::MetadataKeyTooLong)));
-}
-
-/// A value whose length equals MAX_METADATA_VALUE_LENGTH (256 chars) must be accepted.
-#[test]
-fn value_at_max_length_accepted() {
-    let (env, client, _token, _admin) = setup();
-    let (sub_id, subscriber, _merchant) = create_subscription(&env, &client, &client.address);
-
-    let val = String::from_str(&env, &"v".repeat(crate::MAX_METADATA_VALUE_LENGTH as usize));
-    // Note: `MAX_METADATA_VALUE_LENGTH` is likewise enforced in bytes
-    // (UTF-8 encoded); this test uses ASCII so bytes == chars.
-    client.set_metadata(&sub_id, &subscriber, &String::from_str(&env, "k"), &val);
-
-    assert_eq!(
-        client.get_metadata(&sub_id, &String::from_str(&env, "k")),
-        val
-    );
 }
 
 // ── Cross-subscription replay protection ─────────────────────────────────────
