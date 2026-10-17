@@ -74,9 +74,9 @@ pub use nonce::compute_next_nonce;
 pub use types::{
     CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowOpenedEvent,
     CancellationEscrowReleasedEvent, Dispute, DisputeOpenedEvent, DisputeResolvedEvent,
-    DisputeRespondedEvent, DisputeStatus, Error, Proposal, ProposalCancelledEvent,
+    DisputeRespondedEvent, DisputeStatus, DisputeWindowUpdatedEvent, Error, Proposal, ProposalCancelledEvent,
     ProposalExecutedEvent, ProposalKind, ProposalSubmittedEvent, ProposalVotedEvent,
-    ProtocolFeeConfiguredEvent, EVENT_SCHEMA_VERSION,
+    ProtocolFeeConfiguredEvent, ResolutionTarget, EVENT_SCHEMA_VERSION,
 };
 
 // ── Stub modules for features not yet extracted to separate files ─────────────
@@ -684,8 +684,8 @@ pub use types::{
     BillingPeriodSnapshot, BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
     BillingStatementsPage, BulkSubscriptionResult, CapInfo, ChargeExecutionResult,
     ChargeFailureEvent, ContractSnapshot, Coupon, DataKey, DiscountAppliedEvent,
-    DisputeEscrowLedger, EmergencyStopDisabledEvent,
-    EmergencyStopEnabledEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    DisputeEscrowLedger, EmergencyStopDisabledEvent, EmergencyStopEnabledEvent,
+    EmergencyStopEvent, FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
     FeeConvertedEvent, GracePeriodEnteredEvent, LifetimeCapReachedEvent,
     LifetimeCapUpdatedEvent, MerchantBalanceEntry,
     MerchantCapDefaultUpdatedEvent, MerchantConfig, MerchantConfigInitializedEvent,
@@ -1197,8 +1197,9 @@ impl SubscriptionVault {
         
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_enabled"),),
-            EmergencyStopEnabledEvent {
+            EmergencyStopEvent {
                 admin,
+                state: true,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
@@ -1230,8 +1231,9 @@ impl SubscriptionVault {
         
         env.events().publish(
             (Symbol::new(&env, "emergency_stop_disabled"),),
-            EmergencyStopDisabledEvent {
+            EmergencyStopEvent {
                 admin,
+                state: false,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
             },
@@ -2839,6 +2841,21 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         let _guard = crate::reentrancy::ReentrancyGuard::lock(&env, "resolve_dispute")?;
         dispute::do_resolve_dispute(&env, admin, dispute_id, resolve_to_subscriber)
+    }
+
+    /// Set the global dispute response window in seconds. Admin only, with the
+    /// standard per-key config cooldown. Governance proposals can also update it.
+    pub fn set_dispute_window_secs(
+        env: Env,
+        admin: Address,
+        window_secs: u64,
+    ) -> Result<(), Error> {
+        admin::do_set_dispute_window_secs(&env, admin, window_secs)
+    }
+
+    /// Return the configured dispute response window in seconds.
+    pub fn get_dispute_window_secs(env: Env) -> u64 {
+        admin::get_dispute_window_secs(&env)
     }
 
     /// Read a dispute record by its ID.

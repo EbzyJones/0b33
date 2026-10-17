@@ -9,12 +9,13 @@ use soroban_sdk::{
 
 /// Current schema version for contract events.
 ///
-/// Version `4` appends `initiator_role: RecoveryInitiatorRole` to
-/// [`RecoveryEvent`] and [`SubscriberWithdrawalEvent`] so auditors can tell
-/// the admin recovery path from the subscriber withdrawal path (#437). The
-/// field is appended *after* `schema_version` on both events, keeping the
-/// schema-v3 positional prefix intact for existing indexers.
-pub const EVENT_SCHEMA_VERSION: u32 = 4;
+/// Version `6` appends `token: Address` to dispute events. Version `5`
+/// appended `resolved_to: ResolutionTarget` to [`DisputeResolvedEvent`].
+/// Version `4` appended `initiator_role: RecoveryInitiatorRole` to
+/// [`RecoveryEvent`] and [`SubscriberWithdrawalEvent`]. New fields are
+/// appended after `schema_version` to preserve existing positional prefixes
+/// for indexers.
+pub const EVENT_SCHEMA_VERSION: u32 = 6;
 
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
@@ -349,8 +350,8 @@ pub enum DataKey {
     MerchantSubAccount(Address, Symbol),
     /// Registered sub-account labels for a merchant (instance). Discriminant 81.
     MerchantSubAccountList(Address),
-    /// Governance-approved exception to the subscription-amount usage charge cap (instance).
-    UsageChargeCapOverride(Address),
+    /// Configured dispute response window in seconds. Discriminant 84.
+    DisputeWindowSecs,
 }
 
 impl DataKey {
@@ -445,7 +446,7 @@ impl DataKey {
             DataKey::EmergencyWithdrawIntent(_) => 81,
             DataKey::MerchantSubAccount(_, _) => 82,
             DataKey::MerchantSubAccountList(_) => 83,
-            DataKey::UsageChargeCapOverride(_) => 84,
+            DataKey::DisputeWindowSecs => 84,
         }
     }
 
@@ -521,7 +522,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     79, // OraclePriceHistoryEntry(Address, u32)
     82, // MerchantSubAccount(Address, Symbol)
     83, // MerchantSubAccountList(Address)
-    84, // UsageChargeCapOverride(Address)
+    84, // DisputeWindowSecs
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -835,11 +836,11 @@ impl InsufficientBalanceError {
     }
 }
 
-/// Time window (in seconds) for the dispute/chargeback process.
+/// Default time window (in seconds) for the dispute/chargeback process.
 ///
-/// During this window the merchant/admin may respond to a dispute. If no
-/// response is received before the window elapses, the dispute may be resolved
-/// in favour of the subscriber.
+/// The admin may override this value with `set_dispute_window_secs`. If no
+/// response is received before the configured window elapses, the dispute may
+/// be resolved in favour of the subscriber.
 pub const DISPUTE_WINDOW_SECS: u64 = 14 * 24 * 60 * 60; // 14 days
 
 /// Hold window (in seconds) applied to a cancellation refund before the
@@ -1030,6 +1031,14 @@ pub enum DisputeStatus {
     ResolvedToSubscriber = 3,
 }
 
+/// Party that receives escrowed funds when a dispute is resolved.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolutionTarget {
+    Subscriber = 0,
+    Merchant = 1,
+}
+
 /// Dispute / chargeback record tracking contested charges.
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1069,6 +1078,8 @@ pub struct DisputeOpenedEvent {
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+    /// Token denomination for the disputed amount.
+    pub token: Address,
 }
 
 /// Event emitted when an admin responds to a dispute.
@@ -1081,6 +1092,8 @@ pub struct DisputeRespondedEvent {
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+    /// Token denomination for the disputed amount.
+    pub token: Address,
 }
 
 /// Cumulative escrow ledger for a dispute.
@@ -1109,6 +1122,20 @@ pub struct DisputeResolvedEvent {
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+    /// Party that received the escrowed funds.
+    pub resolved_to: ResolutionTarget,
+    /// Token denomination for the disputed amount.
+    pub token: Address,
+}
+
+/// Event emitted when the global dispute response window changes.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DisputeWindowUpdatedEvent {
+    pub old_window_secs: u64,
+    pub new_window_secs: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }
 
 /// Governance proposal types that require multi-sig guardian approval.
@@ -1130,8 +1157,8 @@ pub enum ProposalKind {
     AddAcceptedToken = 5,
     /// Remove accepted token `Proposal::target`.
     RemoveAcceptedToken = 6,
-    /// Set the merchant's usage charge cap override (`target3`: 0 = disabled, 1 = enabled).
-    SetUsageChargeCapOverride = 7,
+    /// Set the dispute response window in seconds (`target3`).
+    SetDisputeWindow = 7,
 }
 
 
@@ -2066,13 +2093,19 @@ pub struct OracleLivenessEvent {
     pub schema_version: u32,
 }
 
+/// Common event schema for emergency-stop toggles. The `state` field records
+/// whether the stop was enabled (`true`) or disabled (`false`).
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct EmergencyStopEnabledEvent {
+pub struct EmergencyStopEvent {
     pub admin: Address,
+    pub state: bool,
     pub timestamp: u64,
     pub schema_version: u32,
 }
+
+pub type EmergencyStopEnabledEvent = EmergencyStopEvent;
+pub type EmergencyStopDisabledEvent = EmergencyStopEvent;
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -2119,14 +2152,6 @@ pub struct AdminProposalClaimedEvent {
 pub struct AdminProposalCancelledEvent {
     pub admin: Address,
     pub timestamp: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct EmergencyStopDisabledEvent {
-    pub admin: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
 }
 
 #[contracttype]

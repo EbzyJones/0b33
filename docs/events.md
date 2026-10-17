@@ -46,8 +46,7 @@ All events are emitted through Soroban's native event system exactly once per su
 ### Admin & Configuration (7 events)
 | Event | Topic | When | Key Fields |
 |-------|-------|------|-----------|
-| **EmergencyStopEnabledEvent** | `("emergency_stop_enabled",)` | Admin activates emergency stop | admin, timestamp |
-| **EmergencyStopDisabledEvent** | `("emergency_stop_disabled",)` | Admin deactivates emergency stop | admin, timestamp |
+| **EmergencyStopEvent** | `("emergency_stop_enabled",)` / `("emergency_stop_disabled",)` | Admin toggles emergency stop | admin, state, timestamp |
 | **AdminRotatedEvent** | `("admin_rotated",)` | Admin address changed | old_admin, new_admin, timestamp |
 | **RecoveryEvent** | `("recovery",)` | Admin recovers stranded funds | admin, recipient, token, amount, reason, timestamp |
 | **BillingCompactedEvent** | `("billing_compacted",)` | Statements compacted | admin, subscription_id, pruned_count, kept_count, total_pruned_amount, timestamp, aggregate_* |

@@ -28,7 +28,7 @@ use crate::queries;
 use crate::types::{
     CancellationEscrow, CancellationEscrowDisputedEvent, CancellationEscrowReleasedEvent, DataKey,
     Dispute, DisputeEscrowLedger, DisputeOpenedEvent, DisputeResolvedEvent,
-    DisputeRespondedEvent, DisputeStatus, Error, DISPUTE_WINDOW_SECS,
+    DisputeRespondedEvent, DisputeStatus, Error, ResolutionTarget,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Symbol};
 
@@ -124,6 +124,7 @@ pub fn do_open_dispute(
             evidence_hash,
             timestamp: now,
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            token: sub.token.clone(),
         },
     );
 
@@ -159,6 +160,8 @@ pub fn do_respond_dispute(
         .persistent()
         .set(&DataKey::Dispute(dispute_id), &dispute);
 
+    let token = queries::get_subscription(env, dispute.subscription_id)?.token.clone();
+
     env.events().publish(
         (Symbol::new(env, "dispute_responded"), dispute_id),
         DisputeRespondedEvent {
@@ -167,6 +170,7 @@ pub fn do_respond_dispute(
             admin_evidence_hash: evidence_hash,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            token,
         },
     );
 
@@ -202,7 +206,8 @@ pub fn do_resolve_dispute(
     }
 
     let now = env.ledger().timestamp();
-    let window_elapsed = now.saturating_sub(dispute.opened_at) >= DISPUTE_WINDOW_SECS;
+    let window_elapsed = now.saturating_sub(dispute.opened_at)
+        >= admin::get_dispute_window_secs(env);
 
     if dispute.status == DisputeStatus::Open && !window_elapsed {
         // Admin must respond before the dispute can be resolved (merchant
@@ -314,6 +319,12 @@ pub fn do_resolve_dispute(
             resolution,
             timestamp: now,
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            resolved_to: if resolution == DisputeStatus::ResolvedToMerchant {
+                ResolutionTarget::Merchant
+            } else {
+                ResolutionTarget::Subscriber
+            },
+            token: token_addr.clone(),
         },
     );
 
@@ -527,6 +538,7 @@ pub fn do_lodge_escrow_dispute(
             evidence_hash: None,
             timestamp: now,
             schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            token: escrow.token.clone(),
         },
     );
 

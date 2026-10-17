@@ -369,6 +369,44 @@ pub fn get_grace_period(env: &Env) -> Result<u64, Error> {
     read_config(env, &DataKey::GracePeriod).ok_or(Error::NotInitialized)
 }
 
+/// Set the global dispute response window. Admin updates are rate-limited;
+/// guardian-approved governance proposals intentionally bypass that cooldown.
+pub fn do_set_dispute_window_secs(
+    env: &Env,
+    admin: Address,
+    window_secs: u64,
+) -> Result<(), Error> {
+    require_admin_auth(env, &admin)?;
+    enforce_config_cooldown(env, "DisputeWindowSecs")?;
+    apply_dispute_window_secs(env, window_secs)
+}
+
+/// Return the configured dispute response window, or the historical 14-day default.
+pub fn get_dispute_window_secs(env: &Env) -> u64 {
+    read_config(env, &DataKey::DisputeWindowSecs)
+        .unwrap_or(crate::types::DISPUTE_WINDOW_SECS)
+}
+
+/// Apply a validated dispute-window value. Used by direct admin and governance paths.
+pub(crate) fn apply_dispute_window_secs(env: &Env, window_secs: u64) -> Result<(), Error> {
+    if window_secs == 0 || window_secs > u64::from(u32::MAX) {
+        return Err(Error::InvalidInput);
+    }
+
+    let old_window_secs = get_dispute_window_secs(env);
+    write_config(env, &DataKey::DisputeWindowSecs, &window_secs);
+    env.events().publish(
+        (Symbol::new(env, "dispute_window_updated"),),
+        crate::types::DisputeWindowUpdatedEvent {
+            old_window_secs,
+            new_window_secs: window_secs,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+    Ok(())
+}
+
 pub fn do_set_subscriber_create_cap(env: &Env, admin: Address, cap: u32) -> Result<(), Error> {
     require_admin_auth(env, &admin)?;
     write_config(env, &DataKey::SubscriberCreateCap, &cap);
@@ -1171,6 +1209,7 @@ fn count_legacy_config_keys(env: &Env) -> u32 {
         DataKey::Admin,
         DataKey::MinTopup,
         DataKey::GracePeriod,
+        DataKey::DisputeWindowSecs,
         DataKey::NextId,
         DataKey::EmergencyStop,
         DataKey::Treasury,
@@ -1271,6 +1310,19 @@ pub fn do_migrate_config_to_persistent_internal(env: &Env) -> Result<(), Error> 
         persistent.set(&DataKey::GracePeriod, &val);
         crate::subscription::maybe_extend_ttl(env, &DataKey::GracePeriod, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
         instance.remove(&DataKey::GracePeriod);
+    }
+
+    // DisputeWindowSecs
+    if instance.has(&DataKey::DisputeWindowSecs) {
+        let val: u64 = instance.get(&DataKey::DisputeWindowSecs).unwrap_or(0);
+        persistent.set(&DataKey::DisputeWindowSecs, &val);
+        crate::subscription::maybe_extend_ttl(
+            env,
+            &DataKey::DisputeWindowSecs,
+            SUB_TTL_THRESHOLD,
+            SUB_TTL_EXTEND_TO,
+        );
+        instance.remove(&DataKey::DisputeWindowSecs);
     }
 
     // 5. NextId
