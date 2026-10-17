@@ -1337,11 +1337,7 @@ impl SubscriptionVault {
         let mut out = Vec::new(&env);
         let mut id = start_id;
         while id < end_id {
-            if let Some(sub) = env
-                .storage()
-                .persistent()
-                .get::<_, Subscription>(&DataKey::Sub(id))
-            {
+            if let Some(sub) = subscription::read_subscription(&env, id) {
                 out.push_back(SubscriptionSummary {
                     subscription_id: id,
                     subscriber: sub.subscriber,
@@ -1405,11 +1401,7 @@ impl SubscriptionVault {
         let mut balances = Vec::new(&env);
         let mut id = start_id;
         while id < end_id {
-            if let Some(sub) = env
-                .storage()
-                .persistent()
-                .get::<_, Subscription>(&DataKey::Sub(id))
-            {
+            if let Some(sub) = subscription::read_subscription(&env, id) {
                 subs.push_back(SubscriptionSummary {
                     subscription_id: id,
                     subscriber: sub.subscriber.clone(),
