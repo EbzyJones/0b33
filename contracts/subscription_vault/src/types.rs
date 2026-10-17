@@ -21,7 +21,7 @@ pub const EVENT_SCHEMA_VERSION: u32 = 7;
 pub const SPLIT_CHARGE_EVENT_SCHEMA_VERSION: u32 = 4;
 pub const NONCE_CONSUMED_EVENT_SCHEMA_VERSION: u32 = 4;
 pub const DISCOUNT_APPLIED_EVENT_SCHEMA_VERSION: u32 = 4;
-pub const SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION: u32 = 4;
+pub const SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION: u32 = 5;
 pub const CHARGE_FAILURE_EVENT_SCHEMA_VERSION: u32 = 4;
 pub const SUBSCRIPTION_CHARGE_FAILED_EVENT_SCHEMA_VERSION: u32 = 4;
 pub const SUBSCRIPTION_CANCELLED_EVENT_SCHEMA_VERSION: u32 = 4;
@@ -799,6 +799,7 @@ pub struct SplitChargeEvent {
     pub schema_version: u32,
     pub batch_nonce: Option<u64>,
     pub contract_id: Address,
+    pub prepaid_balance: i128,
 }
 
 /// Event emitted when a soulbound credential is issued for a new subscription.

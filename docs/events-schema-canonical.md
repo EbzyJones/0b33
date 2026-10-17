@@ -21,7 +21,7 @@ env.events().publish(
 - Data struct: always a named type (never raw tuples) — provides stable schema for indexers
 - Data struct field order is append-only: canonical positional fields stay in place and new fields are appended
 - Every event data struct includes the originating `contract_id: Address`; event payloads append this field after all existing fields
-- Versioned event data structs include `schema_version: u32`; schema-v4 charge events append `batch_nonce`, schema-v5 recovery events append `initiator_role`, schema-v6 dispute resolution events append `resolved_to`, and schema-v7 dispute events append `token`
+- Versioned event data structs include `schema_version: u32`; schema-v4 charge events append `batch_nonce`, `SubscriptionChargedEvent` appends `prepaid_balance` in schema version 5, schema-v5 recovery events append `initiator_role`, schema-v6 dispute resolution events append `resolved_to`, and schema-v7 dispute events append `token`
 - Timestamp: included when useful for ordering/metrics
 - No sensitive data: all event fields are customer-visible
 - One per action: ensures deterministic batch operation ordering
@@ -37,7 +37,8 @@ Only an event whose own payload changes advances:
 | Event types | Current version | Schema change |
 | --- | ---: | --- |
 | All other event types | 3 | Append `contract_id: Address` |
-| `SplitChargeEvent`, `NonceConsumedEvent`, `DiscountAppliedEvent`, `SubscriptionChargedEvent`, `ChargeFailureEvent`, `SubscriptionChargeFailedEvent`, `SubscriptionCancelledEvent`, `GracePeriodEnteredEvent`, `SubscriptionExpiredEvent`, `LifetimeCapReachedEvent`, `ProtocolFeeChargedEvent`, `FeeConvertedEvent`, `SubscriptionAutoPausedEvent` | 4 | Append `batch_nonce: Option<u64>` in version 3, then `contract_id: Address` |
+| `SubscriptionChargedEvent` | 5 | Append `batch_nonce: Option<u64>` in version 3, `contract_id: Address` in version 3, then `prepaid_balance: i128` |
+| `SplitChargeEvent`, `NonceConsumedEvent`, `DiscountAppliedEvent`, `ChargeFailureEvent`, `SubscriptionChargeFailedEvent`, `SubscriptionCancelledEvent`, `GracePeriodEnteredEvent`, `SubscriptionExpiredEvent`, `LifetimeCapReachedEvent`, `ProtocolFeeChargedEvent`, `FeeConvertedEvent`, `SubscriptionAutoPausedEvent` | 4 | Append `batch_nonce: Option<u64>` in version 3, then `contract_id: Address` |
 | `RecoveryEvent`, `SubscriberWithdrawalEvent` | 5 | Append `initiator_role: RecoveryInitiatorRole` in version 4, then `contract_id: Address` |
 | `DisputeOpenedEvent`, `DisputeRespondedEvent` | 7 | Append `token: Address` in version 6, then `contract_id: Address` |
 | `DisputeResolvedEvent` | 7 | Append `resolved_to: ResolutionTarget` in version 5, `token: Address` in version 6, then `contract_id: Address` |
@@ -125,6 +126,7 @@ Emitted when an interval-based charge succeeds via `charge_subscription()` or `b
 - `merchant`: Address — merchant receiving the payment
 - `amount`: i128 — total charged amount
 - `lifetime_charged`: i128 — cumulative total charged over subscription lifetime
+- `prepaid_balance`: i128 — remaining prepaid balance after this charge; appended after `contract_id` in schema version 5
 - `batch_nonce`: Option<u64> — present when emitted by a batch charge
 
 **Example Use Cases:**

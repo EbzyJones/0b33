@@ -427,7 +427,7 @@ Admin → disable_emergency_stop(admin)
 |-------|-------------|-----------|
 | `sub_new` | `SubscriptionCreatedEvent` | `subscription_id`, `subscriber`, `merchant`, `amount`, `interval_seconds` |
 | `deposit` | `FundsDepositedEvent` | `subscription_id`, `subscriber`, `amount`, `new_balance` |
-| `charged` | `SubscriptionChargedEvent` | `subscription_id`, `merchant`, `amount`, `remaining_balance` |
+| `charged` | `SubscriptionChargedEvent` | `subscription_id`, `merchant`, `amount`, `prepaid_balance` |
 | `charge_failed` | `SubscriptionChargeFailedEvent` | `subscription_id`, `error_code`, `status` |
 | `paused` | `SubscriptionPausedEvent` | `subscription_id`, `authorizer` |
 | `resumed` | `SubscriptionResumedEvent` | `subscription_id`, `authorizer` |

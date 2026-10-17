@@ -27,7 +27,7 @@ Every structured event payload includes `contract_id: Address`, the address of t
 ### Charging Events (7 events)
 | Event | Topic | When | Key Fields |
 |-------|-------|------|-----------|
-| **SubscriptionChargedEvent** | `("charged",)` | Interval charge succeeds | subscription_id, merchant, amount, lifetime_charged |
+| **SubscriptionChargedEvent** | `("charged",)` | Interval charge succeeds | subscription_id, merchant, amount, lifetime_charged, prepaid_balance |
 | **SubscriptionChargeFailedEvent** | `("charge_failed", id)` | Charge fails (insufficient balance) | subscription_id, merchant, required_amount, available_balance, shortfall, resulting_status, timestamp |
 | **OneOffChargedEvent** | `("one_off_charged", id)` | Off-interval charge | subscription_id, merchant, amount |
 | **ProtocolFeeChargedEvent** | `("protocol_fee_charged", id)` | Fees routed to treasury | subscription_id, treasury, fee_amount, merchant_amount, timestamp |

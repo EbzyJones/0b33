@@ -1064,6 +1064,7 @@ pub fn do_grace_buyout(
             batch_nonce: crate::admin::current_batch_nonce(env),
             schema_version: crate::types::SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION,
             contract_id: env.current_contract_address(),
+            prepaid_balance: sub.prepaid_balance,
         },
     );
 

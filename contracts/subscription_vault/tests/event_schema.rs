@@ -82,6 +82,7 @@ fn test_batch_charge_events_include_nonce_and_standalone_events_do_not() {
         charged.schema_version,
         SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION
     );
+    assert_eq!(charged.prepaid_balance, 1_000_000);
     let consumed_nonce = consumed_nonce.expect("batch must emit nonce event");
     assert_eq!(
         consumed_nonce.batch_nonce, Some(0)
@@ -106,12 +107,10 @@ fn test_batch_charge_events_include_nonce_and_standalone_events_do_not() {
             }
         }
     }
-    assert_eq!(
-        standalone_charged
-            .expect("standalone call must emit charge event")
-            .batch_nonce,
-        None
-    );
+    let standalone_charged =
+        standalone_charged.expect("standalone call must emit charge event");
+    assert_eq!(standalone_charged.batch_nonce, None);
+    assert_eq!(standalone_charged.prepaid_balance, 0);
 }
 
 #[test]
