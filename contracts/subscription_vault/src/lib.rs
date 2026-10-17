@@ -698,7 +698,7 @@ pub use types::{
     PlanDeprecatedEvent, PlanRegisteredEvent, PlanTemplate, PlanTemplateUpdatedEvent,
     PrepaidQueryRequest, PrepaidQueryResult, ProtocolFeeChargedEvent, RateLimitTrippedEvent,
     ReconciliationProof, ReconciliationSummaryPage, RecoveryEvent, RecoveryInitiatorRole,
-    RecoveryReason,
+    RecoveryReason, RecoveryResult,
     ReferralAttributedEvent, ScheduledPayoutEvent, SchemaMigratedEvent, SignedMetadataPayload,
     SchemaMigrationSummary,
     SnapshotExportedEvent, SnapshotRestoredEvent, SplitChargeEvent, SplitPayees,
@@ -981,7 +981,12 @@ impl SubscriptionVault {
         )
     }
 
-    /// Allows the admin to recover funds that are not tied to any subscription.
+    /// Allows the admin to recover unaccounted funds.
+    ///
+    /// The transfer is capped at the token's actual recoverable balance, so
+    /// subscriber prepaid funds and other accounted liabilities remain intact.
+    /// The result reports both the amount transferred and any amount trimmed
+    /// from the request.
     pub fn recover_stranded_funds(
         env: Env,
         admin: Address,
@@ -990,7 +995,7 @@ impl SubscriptionVault {
         amount: i128,
         recovery_id: String,
         reason: RecoveryReason,
-    ) -> Result<(), Error> {
+    ) -> Result<RecoveryResult, Error> {
         admin::do_recover_stranded_funds(&env, admin, token, recipient, amount, recovery_id, reason)
     }
 
