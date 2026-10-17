@@ -423,13 +423,9 @@ pub fn compute_next_charge_info(env: &Env, subscription: &Subscription) -> NextC
         SubscriptionStatus::Archived => soroban_sdk::symbol_short!("archived"),
     };
 
-    let grace_deadline = if subscription.status == SubscriptionStatus::GracePeriod {
-        subscription
-            .grace_start_timestamp
-            .map(|start| start.saturating_add(crate::admin::get_grace_period(env).unwrap_or(0)))
-    } else {
-        None
-    };
+    let grace_deadline = subscription
+        .grace_start_timestamp
+        .map(|start| start.saturating_add(crate::admin::get_grace_period(env).unwrap_or(0)));
 
     NextChargeInfo {
         next_charge_timestamp,

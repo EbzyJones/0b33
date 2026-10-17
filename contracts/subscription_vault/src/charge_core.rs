@@ -844,7 +844,6 @@ pub fn charge_one(
                     if grace_duration == 0 || now >= grace_expires {
                         // Grace window closed — move to InsufficientBalance
                         transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
-                        sub.grace_start_timestamp = None;
                     }
                     // else: stay in GracePeriod, keep clock unchanged
                 } else {
@@ -1089,6 +1088,19 @@ pub fn charge_usage_one(
         ));
     }
 
+    if !sub.auto_renew {
+        let next_allowed = next_charge_time(sub.last_payment_timestamp, sub.interval_seconds)?;
+        if now >= next_allowed {
+            return Err(charge_fail(
+                env,
+                subscription_id,
+                Error::NotActive,
+                usage_amount,
+                now,
+            ));
+        }
+    }
+
     if usage_amount <= 0 {
         return Err(charge_fail(
             env,
@@ -1176,7 +1188,7 @@ pub fn charge_usage_one(
                 period_index: now.saturating_sub(sub.start_time) / sub.interval_seconds,
             });
 
-        // 1. Burst protection
+        // A zero interval explicitly disables burst protection.
         if limits.burst_min_interval_secs > 0 {
             let elapsed = now.saturating_sub(state.last_usage_timestamp);
             if elapsed < limits.burst_min_interval_secs {
