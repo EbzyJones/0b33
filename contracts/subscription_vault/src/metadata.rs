@@ -157,7 +157,8 @@ pub fn do_set_metadata_signed(
             signer: signer_address,
             nonce: payload.nonce,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -363,7 +364,8 @@ pub fn set_metadata(
             subscription_id,
             key,
             authorizer: caller.clone(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -415,7 +417,8 @@ pub fn delete_metadata(
                 subscription_id,
                 key,
                 authorizer: caller.clone(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
     }

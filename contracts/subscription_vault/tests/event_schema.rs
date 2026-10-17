@@ -8,7 +8,9 @@ use soroban_sdk::{
 };
 use subscription_vault::{
     AdminRotatedEvent, SubscriptionCreatedEvent, SubscriptionVault, SubscriptionVaultClient,
-    EVENT_SCHEMA_VERSION, BlocklistAddedEvent, BlocklistRemovedEvent, NonceConsumedEvent,
+    BASE_EVENT_SCHEMA_VERSION, NONCE_CONSUMED_EVENT_SCHEMA_VERSION,
+    SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION, BlocklistAddedEvent, BlocklistRemovedEvent,
+    NonceConsumedEvent,
     SubscriptionChargedEvent, SubscriptionCancelledEvent, SubscriptionExpiredEvent,
     FundsDepositedEvent, MerchantWithdrawalEvent, SubscriberWithdrawalEvent,
     GracePeriodEnteredEvent, SubscriptionResumedEvent, EmergencyStopEnabledEvent,
@@ -74,12 +76,20 @@ fn test_batch_charge_events_include_nonce_and_standalone_events_do_not() {
         }
     }
 
-    assert_eq!(charged.expect("batch must emit charge event").batch_nonce, Some(0));
+    let charged = charged.expect("batch must emit charge event");
+    assert_eq!(charged.batch_nonce, Some(0));
     assert_eq!(
-        consumed_nonce
-            .expect("batch must emit nonce event")
-            .batch_nonce,
-        Some(0)
+        charged.schema_version,
+        SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION
+    );
+    assert_eq!(charged.prepaid_balance, 1_000_000);
+    let consumed_nonce = consumed_nonce.expect("batch must emit nonce event");
+    assert_eq!(
+        consumed_nonce.batch_nonce, Some(0)
+    );
+    assert_eq!(
+        consumed_nonce.schema_version,
+        NONCE_CONSUMED_EVENT_SCHEMA_VERSION
     );
 
     env.ledger().set_timestamp(initial_timestamp + 7200);
@@ -97,12 +107,10 @@ fn test_batch_charge_events_include_nonce_and_standalone_events_do_not() {
             }
         }
     }
-    assert_eq!(
-        standalone_charged
-            .expect("standalone call must emit charge event")
-            .batch_nonce,
-        None
-    );
+    let standalone_charged =
+        standalone_charged.expect("standalone call must emit charge event");
+    assert_eq!(standalone_charged.batch_nonce, None);
+    assert_eq!(standalone_charged.prepaid_balance, 0);
 }
 
 #[test]
@@ -174,7 +182,8 @@ fn test_nonce_consumed_and_admin_rotated_events_emitted() {
             .expect("admin rotation event must be emitted")
             .2,
     );
-    assert_eq!(admin_rotated.schema_version, EVENT_SCHEMA_VERSION);
+    assert_eq!(admin_rotated.contract_id, contract_id);
+    assert_eq!(admin_rotated.schema_version, BASE_EVENT_SCHEMA_VERSION);
 }
 
 #[test]
@@ -220,7 +229,8 @@ fn test_subscription_created_event_emitted() {
             .expect("subscription created event must be emitted")
             .2,
     );
-    assert_eq!(created.schema_version, EVENT_SCHEMA_VERSION);
+    assert_eq!(created.contract_id, contract_id);
+    assert_eq!(created.schema_version, BASE_EVENT_SCHEMA_VERSION);
 }
 
 // ---------------------------------------------------------------------------
@@ -343,10 +353,11 @@ mod exhaustive_event_schema_checks {
             .expect("SubscriptionCreatedEvent must be emitted");
 
         let created: SubscriptionCreatedEvent = FromVal::from_val(&env, &event.2);
+        assert_eq!(created.contract_id, contract_id);
         assert_eq!(
-            created.schema_version, EVENT_SCHEMA_VERSION,
+            created.schema_version, BASE_EVENT_SCHEMA_VERSION,
             "SubscriptionCreatedEvent must carry schema_version = {}",
-            EVENT_SCHEMA_VERSION
+            BASE_EVENT_SCHEMA_VERSION
         );
     }
 
@@ -383,10 +394,11 @@ mod exhaustive_event_schema_checks {
             .expect("AdminRotatedEvent must be emitted");
 
         let rotated: AdminRotatedEvent = FromVal::from_val(&env, &event.2);
+        assert_eq!(rotated.contract_id, contract_id);
         assert_eq!(
-            rotated.schema_version, EVENT_SCHEMA_VERSION,
+            rotated.schema_version, BASE_EVENT_SCHEMA_VERSION,
             "AdminRotatedEvent must carry schema_version = {}",
-            EVENT_SCHEMA_VERSION
+            BASE_EVENT_SCHEMA_VERSION
         );
     }
 
@@ -424,9 +436,9 @@ mod exhaustive_event_schema_checks {
         if let Some(event) = nonce_event {
             let consumed: NonceConsumedEvent = FromVal::from_val(&env, &event.2);
             assert_eq!(
-                consumed.schema_version, EVENT_SCHEMA_VERSION,
+                consumed.schema_version, NONCE_CONSUMED_EVENT_SCHEMA_VERSION,
                 "NonceConsumedEvent must carry schema_version = {}",
-                EVENT_SCHEMA_VERSION
+                NONCE_CONSUMED_EVENT_SCHEMA_VERSION
             );
         }
     }
@@ -452,8 +464,8 @@ mod exhaustive_event_schema_checks {
     #[test]
     fn new_event_types_must_include_schema_version_field() {
         // This test documents the invariant: Every new event added to the
-        // contract MUST include a `pub schema_version: u32` field set to
-        // EVENT_SCHEMA_VERSION at emission time.
+        // contract MUST include a `pub schema_version: u32` field set to that
+        // event type's version at emission time.
 
         // Failure to include this field will be caught by:
         // 1. Compile-time checks if the derive macro is configured to enforce it
@@ -463,12 +475,14 @@ mod exhaustive_event_schema_checks {
         // Enforcement strategy:
         // - All event structs use #[contracttype] derive
         // - All events must explicitly define schema_version field
-        // - All event emissions must set schema_version = EVENT_SCHEMA_VERSION
+        // - All event emissions must set the version for their event type
         // - Integration tests verify at least one event is emitted correctly
 
         assert!(
-            EVENT_SCHEMA_VERSION > 0,
-            "EVENT_SCHEMA_VERSION must be defined and > 0"
+            BASE_EVENT_SCHEMA_VERSION > 0
+                && NONCE_CONSUMED_EVENT_SCHEMA_VERSION > 0
+                && SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION > 0,
+            "Event schema versions must be defined and > 0"
         );
     }
 }

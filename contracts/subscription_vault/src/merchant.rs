@@ -155,7 +155,8 @@ pub fn pause_merchant(env: &Env, merchant: Address) -> Result<(), Error> {
         MerchantPausedEvent {
             merchant,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -176,7 +177,8 @@ pub fn unpause_merchant(env: &Env, merchant: Address) -> Result<(), Error> {
         MerchantUnpausedEvent {
             merchant,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -253,7 +255,8 @@ pub fn set_merchant_vacation(
             start_ts,
             end_ts,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -279,7 +282,8 @@ pub fn clear_merchant_vacation(env: &Env, merchant: Address) -> Result<(), Error
             VacationEndedEvent {
                 merchant,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
     }
@@ -351,7 +355,8 @@ pub fn set_merchant_fee_override(
             admin,
             fee_bps: Some(fee_bps),
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -385,7 +390,8 @@ pub fn clear_merchant_fee_override(
             admin,
             fee_bps: None,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -415,7 +421,8 @@ pub fn set_whitelist_mode(env: &Env, admin: Address, enabled: bool) -> Result<()
             enabled,
             admin,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -473,7 +480,8 @@ pub fn approve_merchant(env: &Env, admin: Address, merchant: Address) -> Result<
             merchant,
             admin,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -493,7 +501,8 @@ pub fn revoke_merchant(env: &Env, admin: Address, merchant: Address) -> Result<(
             merchant,
             admin,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -567,7 +576,8 @@ pub fn set_tag_allowlist(env: &Env, admin: Address, tags: Vec<Symbol>) -> Result
             admin,
             tags,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -631,7 +641,8 @@ pub fn set_merchant_tags(
             admin,
             tags,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -691,7 +702,8 @@ pub fn initialize_merchant_config(
             fee_bips: config.fee_bips,
             allowed_operations: config.allowed_operations,
             timestamp: config.last_updated,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -724,7 +736,8 @@ pub fn set_merchant_config(
             fee_bips: updated_config.fee_bips,
             allowed_operations: updated_config.allowed_operations,
             timestamp,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1046,7 +1059,8 @@ pub fn withdraw_merchant_funds_for_token(
             amount,
             remaining_balance: new_balance,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     env.events().publish(
@@ -1064,7 +1078,8 @@ pub fn withdraw_merchant_funds_for_token(
             refunded: 0,
             ledger_sequence: env.ledger().sequence(),
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1127,7 +1142,8 @@ pub fn merchant_refund(
             token: token_addr.clone(),
             amount,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1245,7 +1261,8 @@ fn flush_merchant_token(
             amount: balance,
             remaining_balance: 0,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1317,7 +1334,8 @@ pub fn do_flush_payouts(env: &Env, merchant: Address, caller: Address) -> Result
             caller,
             tokens_paid,
             timestamp: now,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1421,7 +1439,8 @@ pub fn update_merchant_config(
             fee_bips: config.fee_bips,
             allowed_operations: config.allowed_operations,
             timestamp: config.last_updated,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1573,6 +1592,7 @@ pub fn do_rotate_merchant_address(
             new_merchant,
             subscriptions_updated,
             timestamp: env.ledger().timestamp(),
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1617,7 +1637,8 @@ pub fn do_emit_merchant_balance_snapshot(
             refunded,
             ledger_sequence,
             timestamp,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1674,7 +1695,8 @@ pub fn do_emit_all_balances_snapshot(
                     refunded,
                     ledger_sequence,
                     timestamp,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 };
 
                 env.events().publish(
@@ -1781,7 +1803,8 @@ pub fn do_register_plan(
             usage_enabled,
             lifetime_cap,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1845,7 +1868,8 @@ pub fn do_deprecate_plan(
             plan_id,
             merchant,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1942,7 +1966,8 @@ pub fn register_sub_account(
             merchant: merchant.clone(),
             label: label.clone(),
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -2062,7 +2087,8 @@ pub fn withdraw_sub_account_funds(
             amount,
             remaining_balance: new_balance,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 

@@ -82,7 +82,8 @@ fn charge_fail(
             attempted_amount,
             ledger,
             batch_nonce: crate::admin::current_batch_nonce(env),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::CHARGE_FAILURE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     err
@@ -301,7 +302,8 @@ pub fn charge_one(
                     subscription_id,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
         }
@@ -377,7 +379,8 @@ pub fn charge_one(
                         lifetime_charged: sub.lifetime_charged,
                         timestamp: now,
                         batch_nonce: crate::admin::current_batch_nonce(env),
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
             }
@@ -418,7 +421,8 @@ pub fn charge_one(
                         refund_amount,
                         timestamp: now,
                         batch_nonce: crate::admin::current_batch_nonce(env),
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::SUBSCRIPTION_CANCELLED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
             }
@@ -563,7 +567,8 @@ pub fn charge_one(
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
 
@@ -729,7 +734,8 @@ pub fn charge_one(
                         treasury,
                         timestamp: now,
                         batch_nonce: crate::admin::current_batch_nonce(env),
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::PROTOCOL_FEE_CHARGED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
                 // Emit fee conversion event when fee-token override was applied
@@ -746,7 +752,8 @@ pub fn charge_one(
                                 rate: conv.rate,
                                 timestamp: now,
                                 batch_nonce: crate::admin::current_batch_nonce(env),
-                                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                                schema_version: crate::types::FEE_CONVERTED_EVENT_SCHEMA_VERSION,
+                                contract_id: env.current_contract_address(),
                             },
                         );
                     }
@@ -805,7 +812,9 @@ pub fn charge_one(
                     period_end,
                     salt: salt.clone(),
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
+                    prepaid_balance: sub.prepaid_balance,
                 },
             );
 
@@ -819,7 +828,8 @@ pub fn charge_one(
                             lifetime_charged: sub.lifetime_charged,
                             timestamp: now,
                             batch_nonce: crate::admin::current_batch_nonce(env),
-                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                            schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                            contract_id: env.current_contract_address(),
                         },
                     );
                 }
@@ -874,7 +884,8 @@ pub fn charge_one(
                         grace_expires_at,
                         timestamp: now,
                         batch_nonce: crate::admin::current_batch_nonce(env),
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::GRACE_PERIOD_ENTERED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
             }
@@ -891,7 +902,8 @@ pub fn charge_one(
                     resulting_status: sub.status,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_CHARGE_FAILED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
 
@@ -926,7 +938,8 @@ pub fn charge_one(
                                     threshold,
                                     timestamp: now,
                                     batch_nonce: crate::admin::current_batch_nonce(env),
-                                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                                    schema_version: crate::types::SUBSCRIPTION_AUTO_PAUSED_EVENT_SCHEMA_VERSION,
+                                    contract_id: env.current_contract_address(),
                                 },
                             );
                         }
@@ -1028,7 +1041,8 @@ pub fn charge_usage_one(
                     subscription_id,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
         }
@@ -1054,7 +1068,8 @@ pub fn charge_usage_one(
                         lifetime_charged: sub.lifetime_charged,
                         timestamp: now,
                         batch_nonce: crate::admin::current_batch_nonce(env),
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
             }
@@ -1127,7 +1142,8 @@ pub fn charge_usage_one(
                 timestamp: now,
                 reference,
                 result: UsageChargeResult::UsageCapExceeded,
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         return Ok(UsageChargeResult::UsageCapExceeded);
@@ -1163,7 +1179,8 @@ pub fn charge_usage_one(
                 timestamp: now,
                 reference,
                 result: UsageChargeResult::Replay,
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         return Ok(UsageChargeResult::Replay);
@@ -1202,7 +1219,8 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::BurstLimitExceeded,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
                 return Ok(UsageChargeResult::BurstLimitExceeded);
@@ -1230,7 +1248,8 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::RateLimitExceeded,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
                 return Ok(UsageChargeResult::RateLimitExceeded);
@@ -1257,7 +1276,8 @@ pub fn charge_usage_one(
                         previous_period_usage_units,
                         usage_cap_units: cap_units,
                         timestamp: now,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
             }
@@ -1276,7 +1296,8 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::UsageCapExceeded,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
                 return Ok(UsageChargeResult::UsageCapExceeded);
@@ -1307,7 +1328,8 @@ pub fn charge_usage_one(
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
             return Ok(UsageChargeResult::Charged);
@@ -1428,7 +1450,8 @@ pub fn charge_usage_one(
                         treasury,
                         timestamp: now,
                         batch_nonce: crate::admin::current_batch_nonce(env),
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::PROTOCOL_FEE_CHARGED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
                 // Emit fee conversion event when fee-token override was applied
@@ -1445,7 +1468,8 @@ pub fn charge_usage_one(
                                 rate: conv.rate,
                                 timestamp: now,
                                 batch_nonce: crate::admin::current_batch_nonce(env),
-                                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                                schema_version: crate::types::FEE_CONVERTED_EVENT_SCHEMA_VERSION,
+                                contract_id: env.current_contract_address(),
                             },
                         );
                     }
@@ -1498,7 +1522,8 @@ pub fn charge_usage_one(
                     token: sub.token.clone(),
                     timestamp: now,
                     reference,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
 
@@ -1512,7 +1537,8 @@ pub fn charge_usage_one(
                             lifetime_charged: sub.lifetime_charged,
                             timestamp: now,
                             batch_nonce: crate::admin::current_batch_nonce(env),
-                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                            schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                            contract_id: env.current_contract_address(),
                         },
                     );
                 }
@@ -1534,7 +1560,8 @@ pub fn charge_usage_one(
                     resulting_status: SubscriptionStatus::InsufficientBalance,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::SUBSCRIPTION_CHARGE_FAILED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
             Ok(UsageChargeResult::Charged)
@@ -1612,7 +1639,8 @@ pub(crate) fn credit_charge_payees(
                 payees: payees_vec,
                 timestamp: env.ledger().timestamp(),
                 batch_nonce: crate::admin::current_batch_nonce(env),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::SPLIT_CHARGE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
     } else {

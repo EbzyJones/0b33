@@ -201,7 +201,8 @@ pub fn check_and_advance(
             nonce: stored,
             timestamp: env.ledger().timestamp(),
             batch_nonce: crate::admin::current_batch_nonce(env),
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            schema_version: crate::types::NONCE_CONSUMED_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 

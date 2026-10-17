@@ -45,7 +45,8 @@
 
 use crate::types::{
     Coupon, CouponAppliedEvent, CouponCreatedEvent, CouponRevokedEvent, DataKey,
-    DiscountAppliedEvent, Error, EVENT_SCHEMA_VERSION, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    DiscountAppliedEvent, Error, BASE_EVENT_SCHEMA_VERSION,
+    DISCOUNT_APPLIED_EVENT_SCHEMA_VERSION, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use soroban_sdk::{Address, Env, Symbol};
 
@@ -156,7 +157,8 @@ pub fn create_coupon(
             max_redemptions,
             expires_at,
             timestamp: now,
-            schema_version: EVENT_SCHEMA_VERSION,
+            schema_version: BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -183,7 +185,8 @@ pub fn revoke_coupon(env: &Env, merchant: Address, code: Symbol) -> Result<(), E
             merchant,
             code,
             timestamp: env.ledger().timestamp(),
-            schema_version: EVENT_SCHEMA_VERSION,
+            schema_version: BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -264,7 +267,8 @@ pub fn apply_coupon(
             subscriber,
             code,
             timestamp: now,
-            schema_version: EVENT_SCHEMA_VERSION,
+            schema_version: BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -394,7 +398,8 @@ pub fn apply_discount_at_charge(
                     coupon_code: coupon.code,
                     timestamp: now,
                     batch_nonce: crate::admin::current_batch_nonce(env),
-                    schema_version: EVENT_SCHEMA_VERSION,
+                    schema_version: DISCOUNT_APPLIED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
 

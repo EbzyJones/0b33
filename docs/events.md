@@ -8,6 +8,7 @@ This is a reference guide to all events emitted by the subscription vault contra
 ## Quick Event Reference
 
 All events are emitted through Soroban's native event system exactly once per successful state transition or fund movement. Events enable indexers and off-chain systems to reconstruct subscription state without querying the contract.
+Every structured event payload includes `contract_id: Address`, the address of the emitting contract, so indexers can distinguish deployments.
 
 ## Event Categories by Type
 
@@ -26,7 +27,7 @@ All events are emitted through Soroban's native event system exactly once per su
 ### Charging Events (7 events)
 | Event | Topic | When | Key Fields |
 |-------|-------|------|-----------|
-| **SubscriptionChargedEvent** | `("charged",)` | Interval charge succeeds | subscription_id, merchant, amount, lifetime_charged |
+| **SubscriptionChargedEvent** | `("charged",)` | Interval charge succeeds | subscription_id, merchant, amount, lifetime_charged, prepaid_balance |
 | **SubscriptionChargeFailedEvent** | `("charge_failed", id)` | Charge fails (insufficient balance) | subscription_id, merchant, required_amount, available_balance, shortfall, resulting_status, timestamp |
 | **OneOffChargedEvent** | `("one_off_charged", id)` | Off-interval charge | subscription_id, merchant, amount |
 | **ProtocolFeeChargedEvent** | `("protocol_fee_charged", id)` | Fees routed to treasury | subscription_id, treasury, fee_amount, merchant_amount, timestamp |
