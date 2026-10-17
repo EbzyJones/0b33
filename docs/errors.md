@@ -310,6 +310,7 @@ Column definitions:
 | 10006 | `DisputeAlreadyResponded` | Dispute | `dispute.rs`, `lib.rs`, `test.rs`, `test_dispute_matrix.rs` | Dispute is not in `Open` status; cannot respond twice. | DisputeRespondedEvent |
 | 10007 | `DisputeOverpay` | Dispute | `dispute.rs` | Fix the resolution split so total disbursed does not exceed the escrowed amount. | DisputeResolvedEvent |
 | 10008 | `SubscriberHasOpenDisputes` | Dispute | `blocklist.rs`, `test.rs` | Resolve the subscriber's open disputes before requesting blocklist removal. | DisputeResolvedEvent |
+| 10009 | `DisputeAmountExceedsMerchantBalance` | Dispute | `dispute.rs`, `test_dispute_matrix.rs` | Reduce the disputed amount to the merchant's available balance. | — |
 | 11001 | `TransferIntentNotFound` | Subscription Transfer | `subscription.rs`, `test_subscription_transfer.rs` | Verify transfer initiation or expiry before retrying. | — |
 | 11002 | `TransferIntentExpired` | Subscription Transfer | `subscription.rs`, `test_subscription_transfer.rs` | Transfer intent has expired; initiate a new transfer. | — |
 | 11003 | `InvalidTransferTarget` | Subscription Transfer | `subscription.rs`, `test_subscription_transfer.rs` | Provide a valid target address (not self). | — |

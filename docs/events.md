@@ -23,7 +23,7 @@ All events are emitted through Soroban's native event system exactly once per su
 | **SubscriptionExpiredEvent** | `("subscription_expired", id)` | Auto-expired by expires_at | subscription_id, timestamp |
 | **SubscriptionRecoveryReadyEvent** | `("recovery_ready", id)` | Underfunded → Active | subscription_id, subscriber, prepaid_balance, required_amount, timestamp |
 
-### Charging Events (6 events)
+### Charging Events (7 events)
 | Event | Topic | When | Key Fields |
 |-------|-------|------|-----------|
 | **SubscriptionChargedEvent** | `("charged",)` | Interval charge succeeds | subscription_id, merchant, amount, lifetime_charged |
@@ -31,6 +31,7 @@ All events are emitted through Soroban's native event system exactly once per su
 | **OneOffChargedEvent** | `("one_off_charged", id)` | Off-interval charge | subscription_id, merchant, amount |
 | **ProtocolFeeChargedEvent** | `("protocol_fee_charged", id)` | Fees routed to treasury | subscription_id, treasury, fee_amount, merchant_amount, timestamp |
 | **UsageStatementEvent** | `("usage_statement", id)` | Usage-based charge | subscription_id, merchant, usage_amount, token, timestamp, reference |
+| **UsageCapResetEvent** | `("usage_cap_reset", id)` | Usage cap resets on billing-period rollover | subscription_id, merchant, token, previous_period_index, current_period_index, previous_period_usage_units, usage_cap_units, timestamp |
 | **LifetimeCapReachedEvent** | `("lifetime_cap_reached", id)` | Lifetime cap exhausted | subscription_id, lifetime_cap, lifetime_charged, timestamp |
 
 ### Fund Movement (5 events)
@@ -45,8 +46,7 @@ All events are emitted through Soroban's native event system exactly once per su
 ### Admin & Configuration (7 events)
 | Event | Topic | When | Key Fields |
 |-------|-------|------|-----------|
-| **EmergencyStopEnabledEvent** | `("emergency_stop_enabled",)` | Admin activates emergency stop | admin, timestamp |
-| **EmergencyStopDisabledEvent** | `("emergency_stop_disabled",)` | Admin deactivates emergency stop | admin, timestamp |
+| **EmergencyStopEvent** | `("emergency_stop_enabled",)` / `("emergency_stop_disabled",)` | Admin toggles emergency stop | admin, state, timestamp |
 | **AdminRotatedEvent** | `("admin_rotated",)` | Admin address changed | old_admin, new_admin, timestamp |
 | **RecoveryEvent** | `("recovery",)` | Admin recovers stranded funds | admin, recipient, token, amount, reason, timestamp |
 | **BillingCompactedEvent** | `("billing_compacted",)` | Statements compacted | admin, subscription_id, pruned_count, kept_count, total_pruned_amount, timestamp, aggregate_* |

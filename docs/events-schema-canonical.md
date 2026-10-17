@@ -20,19 +20,22 @@ env.events().publish(
 - Topic tuple format: `(Symbol, optional_id)` — enables filtering by event type and resource
 - Data struct: always a named type (never raw tuples) — provides stable schema for indexers
 - Data struct field order is append-only: canonical positional fields stay in place and new fields are appended
-- Every event data struct includes `schema_version: u32`; schema-v3 charge events append `batch_nonce` after it, and schema-v4 recovery events append `initiator_role` after that
+- Every event data struct includes `schema_version: u32`; schema-v3 charge events append `batch_nonce` after it, schema-v4 recovery events append `initiator_role`, schema-v5 dispute resolution events append `resolved_to`, and schema-v6 dispute events append `token`
 - Timestamp: included when useful for ordering/metrics
 - No sensitive data: all event fields are customer-visible
 - One per action: ensures deterministic batch operation ordering
 
 ## Schema Versioning Policy
 
-`EVENT_SCHEMA_VERSION` is currently `4`. Version `1` is the historical event payload layout
+`EVENT_SCHEMA_VERSION` is currently `6`. Version `1` is the historical event payload layout
 without an explicit schema version field. Version `2` appends `schema_version: u32` to every event
 data struct. Version `3` appends `batch_nonce: Option<u64>` to charge-related events and
 `NonceConsumedEvent`, after the existing schema-v2 fields. Version `4` appends
 `initiator_role: RecoveryInitiatorRole` to `RecoveryEvent` and `SubscriberWithdrawalEvent`,
-after the existing schema-v3 fields.
+after the existing schema-v3 fields. Version `5` appends
+`resolved_to: ResolutionTarget` to `DisputeResolvedEvent`, after `schema_version`.
+Version `6` appends `token: Address` to the dispute event payloads after the
+existing schema-v5 fields.
 
 Indexers should treat the fields listed for each event below as the canonical positional prefix.
 The `schema_version` field is present on every event and is intentionally not repeated in each
@@ -213,6 +216,26 @@ Emitted when usage-based charges are processed via `charge_usage()`.
 
 ---
 
+### UsageCapResetEvent
+
+**Topic:** `("usage_cap_reset", subscription_id)`
+
+Emitted when a usage-enabled subscription with a configured per-period usage cap enters a later billing period and its accumulated usage is reset.
+
+**Fields:**
+
+- `subscription_id`: u32
+- `merchant`: Address
+- `token`: Address — settlement token
+- `previous_period_index`: u64
+- `current_period_index`: u64
+- `previous_period_usage_units`: i128 — usage accumulated before the reset
+- `usage_cap_units`: i128 — configured per-period cap
+- `timestamp`: u64
+- `schema_version`: u32
+
+---
+
 ## Subscription Status Events
 
 ### SubscriptionPausedEvent
@@ -378,29 +401,20 @@ authorization, not by caller input, so an indexer can rely on them.
 
 ## Admin & Config Events
 
-### EmergencyStopEnabledEvent
+### EmergencyStopEvent
 
-**Topic:** `("emergency_stop_enabled",)`
+**Topic:** `("emergency_stop_enabled",)` or `("emergency_stop_disabled",)`
 
-Emitted when admin triggers emergency stop via `enable_emergency_stop()`.
-
-**Fields:**
-
-- `admin`: Address
-- `timestamp`: u64
-
----
-
-### EmergencyStopDisabledEvent
-
-**Topic:** `("emergency_stop_disabled",)`
-
-Emitted when admin disables emergency stop via `disable_emergency_stop()`.
+Emitted when the admin toggles emergency stop via `enable_emergency_stop()` or `disable_emergency_stop()`.
 
 **Fields:**
 
 - `admin`: Address
+- `state`: bool — `true` when emergency stop is enabled, `false` when it is disabled
 - `timestamp`: u64
+- `schema_version`: u32
+
+This shared schema allows a single decoder to handle both emergency-stop events.
 
 ---
 
@@ -623,6 +637,8 @@ Emitted when a subscriber opens a dispute via `open_dispute()`. Debits the dispu
 - `amount`: i128 — amount moved into escrow
 - `evidence_hash`: Option<BytesN<32>> — optional subscriber-supplied evidence hash
 - `timestamp`: u64
+- `schema_version`: u32
+- `token`: Address — token denomination of the escrowed amount
 
 **Example Use Cases:**
 
@@ -644,6 +660,8 @@ Emitted when an admin responds to a dispute via `respond_dispute()`, transitioni
 - `subscription_id`: u32
 - `admin_evidence_hash`: Option<BytesN<32>> — optional admin-supplied evidence hash
 - `timestamp`: u64
+- `schema_version`: u32
+- `token`: Address — token denomination of the disputed amount
 
 ---
 
@@ -651,16 +669,33 @@ Emitted when an admin responds to a dispute via `respond_dispute()`, transitioni
 
 **Topic:** `("dispute_resolved", dispute_id)`
 
-Emitted when an admin resolves a dispute via `resolve_dispute()`. Clears the escrow and routes the funds to either the merchant (`ResolvedToMerchant`) or the subscriber (any other resolution status), per `resolution`.
+Emitted when an admin resolves a dispute via `resolve_dispute()`. Clears the escrow and routes the funds to the party identified by `resolved_to`.
 
 **Fields:**
 
 - `dispute_id`: u64
 - `subscription_id`: u32
-- `resolution`: DisputeStatus — the final status (indicates which party received the escrowed funds)
+- `resolution`: DisputeStatus — the final dispute status
 - `timestamp`: u64
+- `schema_version`: u32
+- `resolved_to`: ResolutionTarget — `Subscriber` or `Merchant`, identifying who received the escrowed funds
+- `token`: Address — token denomination of the disputed amount
 
 **Security note:** `open_dispute` requires the caller to be the subscription's subscriber; `respond_dispute`/`resolve_dispute` are admin-only. Double-open is prevented via `DataKey::SubscriptionDispute(subscription_id)` — indexers should not expect more than one open dispute per subscription at a time.
+
+### DisputeWindowUpdatedEvent
+
+**Topic:** `("dispute_window_updated",)`
+
+Emitted when an admin or approved governance proposal changes the global dispute
+response window.
+
+**Fields:**
+
+- `old_window_secs`: u64
+- `new_window_secs`: u64
+- `timestamp`: u64
+- `schema_version`: u32
 
 ---
 

@@ -653,7 +653,7 @@ pub fn charge_one(
                     &sub.merchant,
                     &sub.token,
                     fee_amount,
-                    price_cache.as_deref_mut(),
+                    None,
                 ))
             } else {
                 None
@@ -1111,6 +1111,28 @@ pub fn charge_usage_one(
         ));
     }
 
+    let usage_cap_override: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::UsageChargeCapOverride(merchant.clone()))
+        .unwrap_or(false);
+    if !usage_cap_override && usage_amount > sub.amount {
+        env.events().publish(
+            (Symbol::new(env, "usage_charge_rejected"), subscription_id),
+            UsageChargeRejectedEvent {
+                subscription_id,
+                merchant: sub.merchant.clone(),
+                token: sub.token.clone(),
+                usage_amount,
+                timestamp: now,
+                reference,
+                result: UsageChargeResult::UsageCapExceeded,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            },
+        );
+        return Ok(UsageChargeResult::UsageCapExceeded);
+    }
+
     if sub.prepaid_balance < usage_amount {
         return Err(charge_fail(
             env,
@@ -1219,8 +1241,25 @@ pub fn charge_usage_one(
         if let Some(cap_units) = limits.usage_cap_units {
             let current_period = now.saturating_sub(sub.start_time) / sub.interval_seconds;
             if current_period > state.period_index {
+                let previous_period_index = state.period_index;
+                let previous_period_usage_units = state.current_period_usage_units;
                 state.period_index = current_period;
                 state.current_period_usage_units = 0;
+                env.storage().instance().set(&state_key, &state);
+                env.events().publish(
+                    (Symbol::new(env, "usage_cap_reset"), subscription_id),
+                    UsageCapResetEvent {
+                        subscription_id,
+                        merchant: sub.merchant.clone(),
+                        token: sub.token.clone(),
+                        previous_period_index,
+                        current_period_index: current_period,
+                        previous_period_usage_units,
+                        usage_cap_units: cap_units,
+                        timestamp: now,
+                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    },
+                );
             }
             if state
                 .current_period_usage_units

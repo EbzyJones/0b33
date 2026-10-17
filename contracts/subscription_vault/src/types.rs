@@ -4,17 +4,18 @@
 //! or contract entrypoints.
 
 use soroban_sdk::{
-    contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, String, Symbol, Vec,
+    contracterror, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
 };
 
 /// Current schema version for contract events.
 ///
-/// Version `4` appends `initiator_role: RecoveryInitiatorRole` to
-/// [`RecoveryEvent`] and [`SubscriberWithdrawalEvent`] so auditors can tell
-/// the admin recovery path from the subscriber withdrawal path (#437). The
-/// field is appended *after* `schema_version` on both events, keeping the
-/// schema-v3 positional prefix intact for existing indexers.
-pub const EVENT_SCHEMA_VERSION: u32 = 4;
+/// Version `6` appends `token: Address` to dispute events. Version `5`
+/// appended `resolved_to: ResolutionTarget` to [`DisputeResolvedEvent`].
+/// Version `4` appended `initiator_role: RecoveryInitiatorRole` to
+/// [`RecoveryEvent`] and [`SubscriberWithdrawalEvent`]. New fields are
+/// appended after `schema_version` to preserve existing positional prefixes
+/// for indexers.
+pub const EVENT_SCHEMA_VERSION: u32 = 6;
 
 /// Maximum number of metadata keys per subscription.
 pub const MAX_METADATA_KEYS: u32 = 10;
@@ -349,6 +350,8 @@ pub enum DataKey {
     MerchantSubAccount(Address, Symbol),
     /// Registered sub-account labels for a merchant (instance). Discriminant 81.
     MerchantSubAccountList(Address),
+    /// Configured dispute response window in seconds. Discriminant 84.
+    DisputeWindowSecs,
 }
 
 impl DataKey {
@@ -443,6 +446,7 @@ impl DataKey {
             DataKey::EmergencyWithdrawIntent(_) => 81,
             DataKey::MerchantSubAccount(_, _) => 82,
             DataKey::MerchantSubAccountList(_) => 83,
+            DataKey::DisputeWindowSecs => 84,
         }
     }
 
@@ -518,6 +522,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     79, // OraclePriceHistoryEntry(Address, u32)
     82, // MerchantSubAccount(Address, Symbol)
     83, // MerchantSubAccountList(Address)
+    84, // DisputeWindowSecs
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -831,11 +836,11 @@ impl InsufficientBalanceError {
     }
 }
 
-/// Time window (in seconds) for the dispute/chargeback process.
+/// Default time window (in seconds) for the dispute/chargeback process.
 ///
-/// During this window the merchant/admin may respond to a dispute. If no
-/// response is received before the window elapses, the dispute may be resolved
-/// in favour of the subscriber.
+/// The admin may override this value with `set_dispute_window_secs`. If no
+/// response is received before the configured window elapses, the dispute may
+/// be resolved in favour of the subscriber.
 pub const DISPUTE_WINDOW_SECS: u64 = 14 * 24 * 60 * 60; // 14 days
 
 /// Hold window (in seconds) applied to a cancellation refund before the
@@ -857,6 +862,161 @@ pub const DISPUTE_WINDOW_SECS: u64 = 14 * 24 * 60 * 60; // 14 days
 /// against the escrow are governed by [`DISPUTE_WINDOW_SECS`].
 pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 24 * 60 * 60; // 24 hours
 
+/// Escrow record created when a subscription is cancelled.
+///
+/// The remaining prepaid balance is held in escrow for
+/// [`CANCELLATION_ESCROW_WINDOW_SECS`] before the subscriber can claim it.
+/// The merchant can lodge a dispute during this window to convert the escrow
+/// into a live Dispute record.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CancellationEscrow {
+    pub subscription_id: u32,
+    pub amount: i128,
+    pub token: Address,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub released_at: u64,
+}
+
+/// Event emitted when a cancellation refund is placed into escrow.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowOpenedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub merchant: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub released_at: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a cancellation escrow is released to the subscriber.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowReleasedEvent {
+    pub subscription_id: u32,
+    pub subscriber: Address,
+    pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Event emitted when a merchant lodges a dispute against a cancellation escrow,
+/// converting it into a live Dispute record.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct CancellationEscrowDisputedEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub dispute_id: u64,
+    pub amount: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Ring-buffer metadata for a per-token oracle price history window.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OraclePriceHistoryMeta {
+    /// Current write index in the ring buffer (`0..ORACLE_PRICE_HISTORY_SIZE`).
+    pub head: u32,
+    /// Total samples written (capped at `ORACLE_PRICE_HISTORY_SIZE` for read semantics).
+    pub count: u32,
+}
+
+/// Token registry entry.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcceptedToken {
+    pub token: Address,
+    pub decimals: u32,
+}
+
+/// Event emitted when the fee-token override address is set or cleared.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FeeTokenConfiguredEvent {
+    pub admin: Address,
+    pub fee_token: Option<Address>,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+/// Common scale used to compare amounts across tokens with differing decimal
+/// precision in cross-token reconciliation reports (see
+/// `queries::get_token_reconciliation`).
+pub const RECONCILIATION_DECIMALS: u32 = 9;
+
+/// Convert a raw token-base-unit amount to the common `RECONCILIATION_DECIMALS`
+/// scale, using the token's registered decimals (`DataKey::TokenDecimals`).
+///
+/// # Errors
+/// - `Error::InvalidToken` if the token has no registered decimals.
+/// - `Error::InvalidTokenDecimals` if the registered decimals is `0`.
+/// - `Error::Overflow` if scaling up would exceed `i128::MAX`.
+/// - `Error::InvalidInput` if the token has more than `RECONCILIATION_DECIMALS`
+///   decimals and `raw` carries precision that cannot be represented exactly
+///   at the common scale (i.e. scaling down would truncate a non-zero remainder).
+pub fn normalize_amount(env: &Env, token: &Address, raw: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals <= RECONCILIATION_DECIMALS {
+        let scale = 10i128
+            .checked_pow(RECONCILIATION_DECIMALS - decimals)
+            .ok_or(Error::Overflow)?;
+        raw.checked_mul(scale).ok_or(Error::Overflow)
+    } else {
+        let scale = 10i128
+            .checked_pow(decimals - RECONCILIATION_DECIMALS)
+            .ok_or(Error::Overflow)?;
+        if raw % scale != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(raw / scale)
+    }
+}
+
+/// Inverse of [`normalize_amount`]: convert a `RECONCILIATION_DECIMALS`-scaled
+/// amount back to the token's own base-unit precision.
+///
+/// # Errors
+/// Same error conditions as [`normalize_amount`], mirrored for the reverse
+/// direction (e.g. `Error::InvalidInput` if the token has fewer decimals than
+/// the common scale and `normalized` cannot be represented exactly).
+pub fn denormalize_amount(env: &Env, token: &Address, normalized: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+    if decimals <= RECONCILIATION_DECIMALS {
+        let scale = 10i128
+            .checked_pow(RECONCILIATION_DECIMALS - decimals)
+            .ok_or(Error::Overflow)?;
+        if normalized % scale != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(normalized / scale)
+    } else {
+        let scale = 10i128
+            .checked_pow(decimals - RECONCILIATION_DECIMALS)
+            .ok_or(Error::Overflow)?;
+        normalized.checked_mul(scale).ok_or(Error::Overflow)
+    }
+}
+
 /// Lifecycle status of a dispute.
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -869,6 +1029,14 @@ pub enum DisputeStatus {
     ResolvedToMerchant = 2,
     /// Dispute resolved in favour of the subscriber; escrow returned to subscriber.
     ResolvedToSubscriber = 3,
+}
+
+/// Party that receives escrowed funds when a dispute is resolved.
+#[contracttype]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResolutionTarget {
+    Subscriber = 0,
+    Merchant = 1,
 }
 
 /// Dispute / chargeback record tracking contested charges.
@@ -910,6 +1078,8 @@ pub struct DisputeOpenedEvent {
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+    /// Token denomination for the disputed amount.
+    pub token: Address,
 }
 
 /// Event emitted when an admin responds to a dispute.
@@ -922,6 +1092,8 @@ pub struct DisputeRespondedEvent {
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+    /// Token denomination for the disputed amount.
+    pub token: Address,
 }
 
 /// Cumulative escrow ledger for a dispute.
@@ -950,6 +1122,20 @@ pub struct DisputeResolvedEvent {
     pub timestamp: u64,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+    /// Party that received the escrowed funds.
+    pub resolved_to: ResolutionTarget,
+    /// Token denomination for the disputed amount.
+    pub token: Address,
+}
+
+/// Event emitted when the global dispute response window changes.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct DisputeWindowUpdatedEvent {
+    pub old_window_secs: u64,
+    pub new_window_secs: u64,
+    pub timestamp: u64,
+    pub schema_version: u32,
 }
 
 /// Governance proposal types that require multi-sig guardian approval.
@@ -971,6 +1157,8 @@ pub enum ProposalKind {
     AddAcceptedToken = 5,
     /// Remove accepted token `Proposal::target`.
     RemoveAcceptedToken = 6,
+    /// Set the dispute response window in seconds (`target3`).
+    SetDisputeWindow = 7,
 }
 
 
@@ -1243,6 +1431,8 @@ pub enum Error {
     DisputeOverpay = 10007,
     /// Blocklist removal is rejected because the subscriber has open disputes.
     SubscriberHasOpenDisputes = 10008,
+    /// The disputed amount exceeds the merchant's available balance.
+    DisputeAmountExceedsMerchantBalance = 10009,
 
     // --- Subscription Transfer (11000-11099) ---
     /// The transfer intent was not found or has expired.
@@ -1452,8 +1642,8 @@ pub struct SchemaMigrationSummary {
     pub from_version: u32,
     pub to_version: u32,
     pub config_keys_to_migrate: u32,
-    pub subscriptions_for_ledger_expiration: u32,
-    pub subscriptions_for_sub_account_label: u32,
+    pub subs_for_ledger_expiry: u32,
+    pub subs_for_sub_account_label: u32,
     pub dry_run: bool,
     pub would_change: bool,
 }
@@ -1904,13 +2094,19 @@ pub struct OracleLivenessEvent {
     pub schema_version: u32,
 }
 
+/// Common event schema for emergency-stop toggles. The `state` field records
+/// whether the stop was enabled (`true`) or disabled (`false`).
 #[contracttype]
 #[derive(Clone, Debug)]
-pub struct EmergencyStopEnabledEvent {
+pub struct EmergencyStopEvent {
     pub admin: Address,
+    pub state: bool,
     pub timestamp: u64,
     pub schema_version: u32,
 }
+
+pub type EmergencyStopEnabledEvent = EmergencyStopEvent;
+pub type EmergencyStopDisabledEvent = EmergencyStopEvent;
 
 #[contracttype]
 #[derive(Clone, Debug)]
@@ -1957,14 +2153,6 @@ pub struct AdminProposalClaimedEvent {
 pub struct AdminProposalCancelledEvent {
     pub admin: Address,
     pub timestamp: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct EmergencyStopDisabledEvent {
-    pub admin: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
 }
 
 #[contracttype]
@@ -2729,6 +2917,20 @@ pub struct UsageLimitsConfiguredEvent {
 }
 
 #[contracttype]
+#[derive(Clone, Debug)]
+pub struct UsageCapResetEvent {
+    pub subscription_id: u32,
+    pub merchant: Address,
+    pub token: Address,
+    pub previous_period_index: u64,
+    pub current_period_index: u64,
+    pub previous_period_usage_units: i128,
+    pub usage_cap_units: i128,
+    pub timestamp: u64,
+    pub schema_version: u32,
+}
+
+#[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChargeExecutionResult {
     Charged = 0,
@@ -3150,6 +3352,7 @@ mod event_topic_tests {
         TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
         TOPIC_RECOVERY, TOPIC_WITHDRAWN,
     };
+    use soroban_sdk::testutils::Events;
     use soroban_sdk::{xdr::ToXdr, Env, FromVal, Symbol};
 
     /// The emitted wire representation is part of the indexer-facing contract.
@@ -3181,7 +3384,7 @@ mod event_topic_tests {
 
             assert_eq!(
                 emitted_topic.to_xdr(&env),
-                legacy_topic.to_xdr(&env),
+                legacy_topic.clone().to_xdr(&env),
                 "event topic {name} changed its wire representation"
             );
             assert_eq!(
@@ -3200,7 +3403,7 @@ mod event_topic_tests {
         let long_topic = Symbol::new(&env, "subscription_created");
 
         assert_eq!(
-            long_topic.to_xdr(&env),
+            long_topic.clone().to_xdr(&env),
             Symbol::new(&env, "subscription_created").to_xdr(&env)
         );
         assert_ne!(long_topic.to_xdr(&env), TOPIC_CREATED.to_xdr(&env));

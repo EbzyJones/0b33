@@ -124,6 +124,9 @@ pub fn do_submit_proposal(
     if quorum_bps > 10_000 {
         return Err(Error::InvalidInput);
     }
+    if kind == ProposalKind::SetDisputeWindow && target3 == 0 {
+        return Err(Error::InvalidInput);
+    }
 
     let now = env.ledger().timestamp();
     let min_eta = now.checked_add(MIN_TIMELOCK_DELAY).ok_or(Error::Overflow)?;
@@ -321,13 +324,12 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
         // - RecoverStrandedFunds: Transfers funds, doesn't touch init keys
         // - AddAcceptedToken: Adds to token list, doesn't touch DataKey::Token
         // - RemoveAcceptedToken: Removes from token list, doesn't touch DataKey::Token
+        // - SetUsageChargeCapOverride: Updates only a merchant usage-charge setting
         //
         // FUTURE: If adding ProposalKind::UpdateConfig or similar that writes to
         // DataKey::Token, DataKey::MinTopup, or DataKey::GracePeriod, add it here:
-        let writes_to_init_keys = matches!(proposal.kind,
-            // ProposalKind::UpdateConfig => true,  // FUTURE: Add if needed
-            false  // Currently no proposal kind writes to init keys
-        );
+        // Currently no proposal kind writes to initialization-critical keys.
+        let writes_to_init_keys = false;
         
         if writes_to_init_keys {
             return Err(Error::AlreadyInitialized);
@@ -363,6 +365,9 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
         }
         ProposalKind::RemoveAcceptedToken => {
             // Token removal is handled by the caller
+        }
+        ProposalKind::SetDisputeWindow => {
+            crate::admin::apply_dispute_window_secs(env, u64::from(proposal.target3))?;
         }
     }
 

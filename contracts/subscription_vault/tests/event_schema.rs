@@ -12,7 +12,8 @@ use subscription_vault::{
     SubscriptionChargedEvent, SubscriptionCancelledEvent, SubscriptionExpiredEvent,
     FundsDepositedEvent, MerchantWithdrawalEvent, SubscriberWithdrawalEvent,
     GracePeriodEnteredEvent, SubscriptionResumedEvent, EmergencyStopEnabledEvent,
-    EmergencyStopDisabledEvent, AdminProposalCreatedEvent, ReferralAttributedEvent,
+    EmergencyStopDisabledEvent, EmergencyStopEvent, AdminProposalCreatedEvent,
+    ReferralAttributedEvent,
 };
 
 #[test]
@@ -102,6 +103,43 @@ fn test_batch_charge_events_include_nonce_and_standalone_events_do_not() {
             .batch_nonce,
         None
     );
+}
+
+#[test]
+fn test_emergency_stop_events_share_common_schema() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let token_admin = Address::generate(&env);
+    let token_address = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    client.init(&token_address, &7u32, &admin, &1_000_000i128, &3600u64);
+
+    client.enable_emergency_stop(&admin);
+    let enabled: EmergencyStopEvent = FromVal::from_val(
+        &env,
+        &env.events()
+            .all()
+            .last()
+            .expect("enable event must be emitted")
+            .2,
+    );
+    assert_eq!(enabled.state, true);
+
+    client.disable_emergency_stop(&admin);
+    let disabled: EmergencyStopEvent = FromVal::from_val(
+        &env,
+        &env.events()
+            .all()
+            .last()
+            .expect("disable event must be emitted")
+            .2,
+    );
+    assert_eq!(disabled.state, false);
 }
 
 #[test]
