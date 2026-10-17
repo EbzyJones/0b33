@@ -172,7 +172,7 @@ Codes](#error-codes-failure-modes--retry-behavior)).
 | `get_subscriptions_by_token` | `(token, start, limit) -> Vec<Subscription>` | None | Offset pagination. |
 | `list_subscriptions_by_subscriber` | `(subscriber, start_from_id, limit) -> SubscriptionsPage` | None | Cursor-style pagination by subscriber. |
 | `estimate_topup_for_intervals` | `(subscription_id, num_intervals) -> i128` | None | Calculates how much the subscriber needs to deposit to cover the next N intervals. |
-| `get_next_charge_info` | `(subscription_id) -> NextChargeInfo` | None | Returns `{ next_charge_at, is_due, status }`. |
+| `get_next_charge_info` | `(subscription_id) -> NextChargeInfo` | None | Returns next-charge details and `grace_deadline` when a grace period has started, including after its expiry when status is reported as `InsufficientBalance`. |
 | `get_cap_info` | `(subscription_id) -> CapInfo` | None | Lifetime cap summary: cap value, amount charged, remaining, reached flag. |
 | `get_sub_statements_offset` | `(subscription_id, offset, limit, newest_first) -> BillingStatementsPage` | None | Offset pagination for billing statements. `newest_first = true` recommended for infinite scroll. |
 | `get_sub_statements_cursor` | `(subscription_id, cursor, limit, newest_first) -> BillingStatementsPage` | None | Cursor pagination; pass `cursor = None` for first page. |

@@ -1494,6 +1494,7 @@ pub struct NextChargeInfo {
     pub reason: soroban_sdk::Symbol,
     pub amount: i128,
     pub token: soroban_sdk::Address,
+    /// Grace-period expiry remains available after the effective status becomes InsufficientBalance.
     pub grace_deadline: Option<u64>,
 }
 

@@ -10227,6 +10227,35 @@ fn test_usage_charge_with_reference_succeeds() {
 }
 
 #[test]
+fn test_usage_charge_blocked_after_auto_renew_window_closes() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, subscriber, _) = setup_usage_sub(&env, &client);
+    client.set_auto_renew(&id, &subscriber, &false);
+
+    env.ledger()
+        .with_mut(|li| li.timestamp = T0 + INTERVAL - 1);
+    let before_boundary = client.try_charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "auto-renew-before-boundary"),
+    );
+    assert_eq!(before_boundary, Ok(Ok(crate::UsageChargeResult::Charged)));
+
+    env.ledger()
+        .with_mut(|li| li.timestamp = T0 + INTERVAL);
+    let at_boundary = client.try_charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "auto-renew-at-boundary"),
+    );
+    assert_eq!(at_boundary, Err(Ok(Error::NotActive)));
+
+    let subscription = client.get_subscription(&id);
+    assert_eq!(subscription.prepaid_balance, PREPAID - 1_000_000);
+}
+
+#[test]
 fn test_usage_replay_protection() {
     let (env, client, _, _) = setup_test_env();
     env.ledger().with_mut(|li| li.timestamp = T0);
@@ -10280,6 +10309,36 @@ fn test_usage_burst_limit_exceeded() {
         &String::from_str(&env, "ref_b2"),
     );
     assert_eq!(r2, crate::UsageChargeResult::BurstLimitExceeded);
+}
+
+#[test]
+fn test_zero_burst_interval_disables_burst_limit() {
+    let (env, client, _, _) = setup_test_env();
+    env.ledger().with_mut(|li| li.timestamp = T0);
+    let (id, _, merchant) = setup_usage_sub(&env, &client);
+
+    client.configure_usage_limits(
+        &merchant,
+        &id,
+        &None::<u32>,
+        &0u64,
+        &0u64,
+        &None::<i128>,
+    );
+
+    let first = client.charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "ref_zero_burst_1"),
+    );
+    let second = client.charge_usage_with_reference(
+        &id,
+        &1_000_000,
+        &String::from_str(&env, "ref_zero_burst_2"),
+    );
+
+    assert_eq!(first, crate::UsageChargeResult::Charged);
+    assert_eq!(second, crate::UsageChargeResult::Charged);
 }
 
 #[test]
