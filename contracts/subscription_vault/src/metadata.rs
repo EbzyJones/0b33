@@ -259,6 +259,14 @@ pub fn build_metadata_signed_message(
 /// validation). This is checked by testing `key_exists` before comparing
 /// `keys.len() >= MAX_METADATA_KEYS`: if the key already exists the limit
 /// is skipped entirely.
+///
+/// # Length limits are byte-based (Issue #304)
+///
+/// `MAX_METADATA_KEY_LENGTH` and `MAX_METADATA_VALUE_LENGTH` are enforced on
+/// the raw UTF-8 encoded byte length (`String::len()`), **not** on the number
+/// of visible characters. A multi-byte character (e.g. CJK, emoji) counts as
+/// multiple bytes toward the limit, so a key of at most 32 bytes may contain
+/// fewer than 32 characters.
 pub fn validate_metadata_input(
     env: &Env,
     subscription_id: u32,
@@ -533,6 +541,72 @@ mod utf8_validation_tests {
         let env = Env::default();
         let key = String::from_str(&env, "key\0name");
         assert!(validate_utf8_string(&key, "metadata key").is_err());
+    }
+}
+
+#[cfg(test)]
+mod metadata_key_length_tests {
+    use super::*;
+    use soroban_sdk::{Env, String};
+
+    /// A 32-byte ASCII key is exactly at the limit and must be accepted.
+    #[test]
+    fn accepts_ascii_key_at_byte_limit() {
+        let env = Env::default();
+        let key = String::from_str(&env, "01234567890123456789012345678901");
+        assert_eq!(key.len(), MAX_METADATA_KEY_LENGTH);
+        assert!(validate_metadata_input(&env, 1, &key, &String::from_str(&env, "v")).is_ok());
+    }
+
+    /// A 33-byte ASCII key exceeds the limit and must be rejected.
+    #[test]
+    fn rejects_ascii_key_over_byte_limit() {
+        let env = Env::default();
+        let key = String::from_str(&env, "012345678901234567890123456789012");
+        assert_eq!(key.len(), MAX_METADATA_KEY_LENGTH + 1);
+        assert_eq!(
+            validate_metadata_input(&env, 1, &key, &String::from_str(&env, "v")),
+            Err(Error::MetadataKeyTooLong)
+        );
+    }
+
+    /// A multi-byte key whose UTF-8 byte length is exactly at the limit is
+    /// accepted, even though it has fewer than 32 visible characters.
+    #[test]
+    fn accepts_multibyte_key_at_byte_limit() {
+        let env = Env::default();
+        // Each CJK character is 3 bytes in UTF-8; 10 chars = 30 bytes, plus
+        // one 2-byte character ("é") = 32 bytes total.
+        let key = String::from_str(&env, "日本語日本語日本é");
+        assert_eq!(key.len(), MAX_METADATA_KEY_LENGTH);
+        assert!(validate_metadata_input(&env, 1, &key, &String::from_str(&env, "v")).is_ok());
+    }
+
+    /// A multi-byte key whose UTF-8 byte length exceeds the limit is rejected
+    /// even though its character count is well under 32.
+    #[test]
+    fn rejects_multibyte_key_over_byte_limit() {
+        let env = Env::default();
+        // 11 CJK characters = 33 bytes, but only 11 visible characters.
+        let key = String::from_str(&env, "日本語日本語日本語");
+        assert_eq!(key.len(), MAX_METADATA_KEY_LENGTH + 1);
+        assert_eq!(
+            validate_metadata_input(&env, 1, &key, &String::from_str(&env, "v")),
+            Err(Error::MetadataKeyTooLong)
+        );
+    }
+
+    /// An emoji key (4 bytes per code point) is enforced on bytes, not chars.
+    #[test]
+    fn rejects_emoji_key_over_byte_limit() {
+        let env = Env::default();
+        // 9 emoji = 36 bytes, but only 9 visible characters.
+        let key = String::from_str(&env, "🚀🚀🚀🚀🚀🚀🚀🚀🚀");
+        assert_eq!(key.len(), 36);
+        assert_eq!(
+            validate_metadata_input(&env, 1, &key, &String::from_str(&env, "v")),
+            Err(Error::MetadataKeyTooLong)
+        );
     }
 }
 
