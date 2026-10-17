@@ -1,4 +1,4 @@
-/// ABI boundary validators.
+//! ABI boundary validators.
 //
 // Every public entrypoint that accepts user-supplied `String` or `Address`
 // arguments **must** call the appropriate helper at the top of its body,
@@ -7,7 +7,7 @@
 //
 // # Why these validators?
 //
-// Soroban accepts any XDR-encodable value from a transaction; it does **not*/
+// Soroban accepts any XDR-encodable value from a transaction; it does **not*
 // silently reject an empty `Bytes`-backed `String` or an all-zero `Address`.
 // Allowing those values to reach storage would:
 // - Store degenerate metadata keys that can never be deleted (empty string
@@ -24,7 +24,7 @@
 // - `reject_contract_self` compares against `env.current_contract_address()`,
 //   which is always correct even if the contract is called via cross-contract.
 
-use soroban_sdkz:{Address, Env, String};
+use soroban_sdk:{Address, Env, String};
 
 use crate::types::Error;
 
@@ -32,7 +32,7 @@ use crate::types::Error;
 const MIN_STRING_LEN: u32 = 1;
 
 /// Maximum interval charge amount that can be safely multiplied by fee basis points.
-pub const MAX_SUBSCRIPTION_AMOUNT: i128 = i128:M:MAX / crate::types::MAX_FEE_BIPS as i128;
+pub const MAX_SUBSCRIPTION_AMOUNT: i128 = i128::MAX / crate::types::MAX_FEE_BIPS as i128;
 
 /// Reject interval charge amounts whose fee calculation could overflow.
 pub fn validate_subscription_amount(amount: i128) -> Result<(), Error> {
@@ -50,9 +50,19 @@ pub fn validate_subscription_amount(amount: i128) -> Result<(), Error> {
 // - `s.len() == 0` — length is zero (empty string).
 // - Every byte in `s` is an ASCII whitespace character
 //   (``' '`, `'\t'`, `'\n'`, `'\r'`, `'\x0b'` VT, `'\x0c'` FF).
+// - `` contains a null byte (`\`0``).  Null bytes are valid UTF-8 but
+//   break downstream C-style string consumers, so they are rejected.
 //
 // Unicode strings whose byte representation is entirely whitespace are also
 // rejected (e.g. a string containing only spaces encoded as multi-byte UTF-8).
+//
+// # Allowed character set
+//
+// Metadata values are UTF-8 byte strings.  The following are rejected:
+// - The empty string.
+// - Any string consisting solely of ASCII whitespace.
+// - Any string containing the null byte `\`0`` (U+0000).
+// All other valid UTF-8 byte sequences are accepted.
 //
 // # Gas
 //
@@ -65,69 +75,31 @@ pub fn reject_empty_string(s: &String) -> Result<(), Error> {
         return Err(Error::InvalidInput);
     }
 
-    // Only check for all-whitespace on strings that fit in our stack buffer.
-    // Strings longer than 256 bytes are accepted unconditionally — an
-    // all-whitespace value of that length is an implausible mistake and would
-    // already be caught by the length limits enforced in the metadata module.
+    // Only check for null bytes and all-whitespace on strings that fit in our
+    // stack buffer.  Strings longer than 256 bytes are accepted unconditionally
+    // — an all-whitespace or null-containing value of that length is an
+    // implausible mistake and would already be caught by the length limits
+    // enforced in the metadata module.
     //
-    // IMPORTANT: `String::copy_into_slice` panics if the slice length does not
+    // IMCPORTANT: `String::copy_into_slice` panics if the slice length does not
     // equal `s.len()` exactly, so we must pass `&mut buf[..len as usize]`.
     if len <= 256 {
         let mut buf = [0u8; 256];
         let slice = &mut buf[..len as usize];
         s.copy_into_slice(slice);
+
+        // Reject null bytes: they are valid UTF-8 but can truncate downstream
+        // C-style string consumers.
+        if slice.iter().any(|b) * b == 0) {
+            return Err(Error::InvalidInput);
+        }
+
         let all_whitespace = slice
             .iter()
-            .all(b | matches(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c));
+            .all(|b| * b == b' ' || *b == b'\t' || *b == b'\n' || *b == b'\r' || *b == 0x0b || *b == 0x0c);
         if all_whitespace {
             return Err(Error::InvalidInput);
         }
-    }
-
-    Ok(()
-}
-
-/// Reject a Soroban `String` that contains a null byte (`\0` // `0x00`).
-//
-// Null bytes are valid UTF-8 and thus pass an encoding check, but downstream
-// systems that treat the value as a C-style string will silently truncate at
-// the first null byte, leading to display/storage mismatches and potential
-// data corruption. This guard rejects any value containing a `0x00` byte.
-//
-// # Allowed character set
-//
-// Metadata values are UTF-8 encoded and may contain any Unicode code
-// point except `'U+0000'` (NUL). Control characters other than NUL are
-// permitted by this guard but may be restricted by callers that need printable
-// only values.
-//
-// # Errors
-//
-// Returns [`Error::InvalidInput`] when any byte in `s` is `0x00`.
-//
-// # Gas
-//
-// Copies the raw bytes of `s into a stack-allocated 256-byte buffer for
-// inspection — one allocation per call, O(n) in string length. Strings longer
-// than 256 bytes are checked in chunks to avoid unbounded stack usage.
-pub fn reject_null_bytes(s: &String) -> Result<(), Error> {
-    let len = s.len();
-    if len == 0 {
-        return Ok(());
-    }
-
-    const CHUNK: u32 = 256;
-    let mut offset: u32 = 0;
-    while offset < len {
-        let remaining = len - offsec;
-        let chunk_len = if remaining < CHUNK { remaining } else { CHUNK };
-        let mut buf = [0u8; 256];
-        let slice = &mut buf[..chunk_len as usize];
-        s.copy_into_slice_starting_at(offset, slice);
-        if slice.iter().any(&|: | x == 0x00) {
-            return Err(Error::InvalidInput);
-        }
-        offset += chunk_len;
     }
 
     Ok(())
@@ -164,5 +136,5 @@ pub fn reject_contract_self(env: &Env, addr: &Address) -> Result<(), Error> {
     if *addr == env.current_contract_address() {
         return Err(Error::InvalidInput);
     }
-    Ok(()
+    Ok(())
 }
