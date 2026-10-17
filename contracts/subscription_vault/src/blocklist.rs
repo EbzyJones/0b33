@@ -15,6 +15,7 @@ pub struct BlocklistAddedEvent {
     pub reason: String,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+    pub contract_id: Address,
 }
 
 #[contracttype]
@@ -23,6 +24,7 @@ pub struct BlocklistRemovedEvent {
     pub subscriber: Address,
     /// Event schema version for backwards-compatible indexer decoding.
     pub schema_version: u32,
+    pub contract_id: Address,
 }
 
 pub fn is_blocklisted(env: &Env, addr: &Address) -> bool {
@@ -72,6 +74,7 @@ pub fn do_add_to_blocklist(
             subscriber,
             reason: reason_str,
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -147,6 +150,7 @@ pub fn do_remove_from_blocklist(
         BlocklistRemovedEvent {
             subscriber,
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 

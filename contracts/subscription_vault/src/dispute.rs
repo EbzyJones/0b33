@@ -125,6 +125,7 @@ pub fn do_open_dispute(
             timestamp: now,
             schema_version: crate::types::DISPUTE_OPENED_EVENT_SCHEMA_VERSION,
             token: sub.token.clone(),
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -171,6 +172,7 @@ pub fn do_respond_dispute(
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::DISPUTE_RESPONDED_EVENT_SCHEMA_VERSION,
             token,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -325,6 +327,7 @@ pub fn do_resolve_dispute(
                 ResolutionTarget::Subscriber
             },
             token: token_addr.clone(),
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -420,6 +423,7 @@ pub fn do_claim_cancellation_escrow(
             amount: escrow.amount,
             timestamp: now,
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -523,6 +527,7 @@ pub fn do_lodge_escrow_dispute(
             amount: escrow.amount,
             timestamp: now,
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -539,6 +544,7 @@ pub fn do_lodge_escrow_dispute(
             timestamp: now,
             schema_version: crate::types::DISPUTE_OPENED_EVENT_SCHEMA_VERSION,
             token: escrow.token.clone(),
+            contract_id: env.current_contract_address(),
         },
     );
 

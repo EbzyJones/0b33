@@ -482,6 +482,7 @@ pub mod oracle {
                 fixed_denominator,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -558,6 +559,7 @@ pub mod oracle {
             healthy,
             timestamp: now,
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         };
 
         env.events()
@@ -597,6 +599,7 @@ pub mod operator {
                 operator,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -612,6 +615,7 @@ pub mod operator {
                 admin,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -1220,6 +1224,7 @@ impl SubscriptionVault {
                 state: true,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -1254,6 +1259,7 @@ impl SubscriptionVault {
                 state: false,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -1312,6 +1318,7 @@ impl SubscriptionVault {
                 exported: 1,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(SubscriptionSummary {
@@ -1385,6 +1392,7 @@ impl SubscriptionVault {
                 exported: out.len(),
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(out)
@@ -1461,6 +1469,7 @@ impl SubscriptionVault {
                 start_id,
                 exported: subs.len(),
                 timestamp: env.ledger().timestamp(),
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(FullSnapshotPage {
@@ -1554,6 +1563,7 @@ impl SubscriptionVault {
                 start_id,
                 restored,
                 timestamp: env.ledger().timestamp(),
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -1605,6 +1615,7 @@ impl SubscriptionVault {
                 expires_at_ledger,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(sub_id)
@@ -1678,6 +1689,7 @@ impl SubscriptionVault {
                 expires_at_ledger: None,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
 
@@ -1789,6 +1801,7 @@ impl SubscriptionVault {
                 expires_at_ledger,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(sub_id)
@@ -1815,6 +1828,7 @@ impl SubscriptionVault {
                 new_balance: sub.prepaid_balance,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -2170,6 +2184,7 @@ impl SubscriptionVault {
                 timestamp: env.ledger().timestamp(),
                 batch_nonce: admin::current_batch_nonce(&env),
                 schema_version: crate::types::SUBSCRIPTION_CANCELLED_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -2288,6 +2303,7 @@ impl SubscriptionVault {
                 paused_by: authorizer,
                 timestamp,
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -2337,6 +2353,7 @@ impl SubscriptionVault {
                 previous_status: old_sub.status,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -2537,6 +2554,7 @@ impl SubscriptionVault {
                 remaining_balance: new_balance,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(())
@@ -3300,6 +3318,7 @@ impl SubscriptionVault {
                 aggregate_oldest_period_start: aggregate.oldest_period_start,
                 aggregate_newest_period_end: aggregate.newest_period_end,
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         Ok(summary)

@@ -8,6 +8,7 @@ This is a reference guide to all events emitted by the subscription vault contra
 ## Quick Event Reference
 
 All events are emitted through Soroban's native event system exactly once per successful state transition or fund movement. Events enable indexers and off-chain systems to reconstruct subscription state without querying the contract.
+Every structured event payload includes `contract_id: Address`, the address of the emitting contract, so indexers can distinguish deployments.
 
 ## Event Categories by Type
 

@@ -183,6 +183,7 @@ fn test_nonce_consumed_and_admin_rotated_events_emitted() {
             .expect("admin rotation event must be emitted")
             .2,
     );
+    assert_eq!(admin_rotated.contract_id, contract_id);
     assert_eq!(admin_rotated.schema_version, BASE_EVENT_SCHEMA_VERSION);
 }
 
@@ -229,6 +230,7 @@ fn test_subscription_created_event_emitted() {
             .expect("subscription created event must be emitted")
             .2,
     );
+    assert_eq!(created.contract_id, contract_id);
     assert_eq!(created.schema_version, BASE_EVENT_SCHEMA_VERSION);
 }
 
@@ -352,6 +354,7 @@ mod exhaustive_event_schema_checks {
             .expect("SubscriptionCreatedEvent must be emitted");
 
         let created: SubscriptionCreatedEvent = FromVal::from_val(&env, &event.2);
+        assert_eq!(created.contract_id, contract_id);
         assert_eq!(
             created.schema_version, BASE_EVENT_SCHEMA_VERSION,
             "SubscriptionCreatedEvent must carry schema_version = {}",
@@ -392,6 +395,7 @@ mod exhaustive_event_schema_checks {
             .expect("AdminRotatedEvent must be emitted");
 
         let rotated: AdminRotatedEvent = FromVal::from_val(&env, &event.2);
+        assert_eq!(rotated.contract_id, contract_id);
         assert_eq!(
             rotated.schema_version, BASE_EVENT_SCHEMA_VERSION,
             "AdminRotatedEvent must carry schema_version = {}",

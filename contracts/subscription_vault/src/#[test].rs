@@ -21,6 +21,7 @@ fn test_create_subscription_emits_event() {
                 expires_at: None,
                 expires_at_ledger: None,
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: client.address.clone(),
             }.into_val(&env)
         )
     );
@@ -48,6 +49,7 @@ fn test_create_subscription_emits_event() {
                 expires_at: None,
                 expires_at_ledger: None,
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: client.address.clone(),
             }.into_val(&env)
         )
     );
@@ -65,5 +67,6 @@ env.events().publish(
         expires_at: expiration,
         expires_at_ledger: None,
         schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+        contract_id: env.current_contract_address(),
     },
 );

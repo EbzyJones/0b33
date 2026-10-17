@@ -162,6 +162,7 @@ pub fn do_submit_proposal(
             eta,
             timestamp: now,
             schema_version: BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -219,6 +220,7 @@ pub fn do_vote_proposal(env: &Env, proposal_id: u64, voted_yes: bool, nonce: u64
                 eta: proposal.eta,
                 timestamp: now,
                 schema_version: BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         return Err(Error::InvalidInput);
@@ -240,6 +242,7 @@ pub fn do_vote_proposal(env: &Env, proposal_id: u64, voted_yes: bool, nonce: u64
             guardian_weight,
             timestamp: now,
             schema_version: BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -385,6 +388,7 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
             total_weight,
             timestamp: now,
             schema_version: BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -418,6 +422,7 @@ pub fn do_cancel_proposal(env: &Env, proposal_id: u64, reason: String) -> Result
             reason,
             timestamp: env.ledger().timestamp(),
             schema_version: BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 

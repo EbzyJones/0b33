@@ -20,7 +20,8 @@ env.events().publish(
 - Topic tuple format: `(Symbol, optional_id)` — enables filtering by event type and resource
 - Data struct: always a named type (never raw tuples) — provides stable schema for indexers
 - Data struct field order is append-only: canonical positional fields stay in place and new fields are appended
-- Every event data struct includes `schema_version: u32`; schema-v3 charge events append `batch_nonce` after it, schema-v4 recovery events append `initiator_role`, schema-v5 dispute resolution events append `resolved_to`, and schema-v6 dispute events append `token`
+- Every event data struct includes the originating `contract_id: Address`; event payloads append this field after all existing fields
+- Versioned event data structs include `schema_version: u32`; schema-v4 charge events append `batch_nonce`, schema-v5 recovery events append `initiator_role`, schema-v6 dispute resolution events append `resolved_to`, and schema-v7 dispute events append `token`
 - Timestamp: included when useful for ordering/metrics
 - No sensitive data: all event fields are customer-visible
 - One per action: ensures deterministic batch operation ordering
@@ -29,25 +30,30 @@ env.events().publish(
 
 Event versions are tracked independently for each event type. Version `1` is the historical
 event payload layout without an explicit schema version field. Version `2` adds
-`schema_version: u32` to every event data struct; unchanged event types remain at version `2`.
+`schema_version: u32` to every event data struct. Version `3` appends
+`contract_id: Address`, identifying the contract deployment that emitted the event.
 Only an event whose own payload changes advances:
 
 | Event types | Current version | Schema change |
 | --- | ---: | --- |
-| `SplitChargeEvent`, `NonceConsumedEvent`, `DiscountAppliedEvent`, `SubscriptionChargedEvent`, `ChargeFailureEvent`, `SubscriptionChargeFailedEvent`, `SubscriptionCancelledEvent`, `GracePeriodEnteredEvent`, `SubscriptionExpiredEvent`, `LifetimeCapReachedEvent`, `ProtocolFeeChargedEvent`, `FeeConvertedEvent`, `SubscriptionAutoPausedEvent` | 3 | Append `batch_nonce: Option<u64>` |
-| `RecoveryEvent`, `SubscriberWithdrawalEvent` | 4 | Append `initiator_role: RecoveryInitiatorRole` |
-| `DisputeOpenedEvent`, `DisputeRespondedEvent` | 6 | Append `token: Address` |
-| `DisputeResolvedEvent` | 6 | Append `resolved_to: ResolutionTarget` in version 5, then `token: Address` in version 6 |
+| All other event types | 3 | Append `contract_id: Address` |
+| `SplitChargeEvent`, `NonceConsumedEvent`, `DiscountAppliedEvent`, `SubscriptionChargedEvent`, `ChargeFailureEvent`, `SubscriptionChargeFailedEvent`, `SubscriptionCancelledEvent`, `GracePeriodEnteredEvent`, `SubscriptionExpiredEvent`, `LifetimeCapReachedEvent`, `ProtocolFeeChargedEvent`, `FeeConvertedEvent`, `SubscriptionAutoPausedEvent` | 4 | Append `batch_nonce: Option<u64>` in version 3, then `contract_id: Address` |
+| `RecoveryEvent`, `SubscriberWithdrawalEvent` | 5 | Append `initiator_role: RecoveryInitiatorRole` in version 4, then `contract_id: Address` |
+| `DisputeOpenedEvent`, `DisputeRespondedEvent` | 7 | Append `token: Address` in version 6, then `contract_id: Address` |
+| `DisputeResolvedEvent` | 7 | Append `resolved_to: ResolutionTarget` in version 5, `token: Address` in version 6, then `contract_id: Address` |
 
 `EVENT_SCHEMA_VERSION` remains as a deprecated compatibility constant for the maximum version
 currently used. Consumers must inspect the individual event's `schema_version`, not compare it to
-that global maximum. New event types start at version `2`, and subsequent schema changes increment
+that global maximum. New versioned event types start at version `3`, and subsequent schema changes increment
 only that event type's version. Fields remain append-only to preserve existing positional prefixes
 for indexers.
 
 Indexers should treat the fields listed for each event below as the canonical positional prefix.
-The `schema_version` field is present on every event and is intentionally not repeated in each
-individual field list. Future schema changes must be additive-only: append new fields after
+The `contract_id` field is present on every event data struct. Versioned events also include
+`schema_version`. These fields are intentionally not repeated in each individual field list.
+`contract_id` is the emitting contract's address; indexers consuming events from multiple
+deployments should use it to distinguish their origins.
+Future schema changes must be additive-only: append new fields after
 all existing fields, including schema metadata. Removing a field,
 renaming a field, reordering a field, or changing a field type is a breaking schema change that
 requires a new migration plan rather than a silent event update.

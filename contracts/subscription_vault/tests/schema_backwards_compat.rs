@@ -90,7 +90,7 @@ fn subscription_created_v1_fixture_is_strict_prefix_of_current_schema() {
 
     assert_append_only(&v1, &current).expect("current schema must preserve v1 field order");
     assert!(current.len() > v1.len(), "current schema must append fields");
-    assert_eq!(current.last().map(String::as_str), Some("schema_version"));
+    assert_eq!(current.last().map(String::as_str), Some("contract_id"));
     assert_schema_version(current_snapshot, BASE_EVENT_SCHEMA_VERSION)
         .expect("fixture must carry the event type's version");
 }
@@ -103,7 +103,7 @@ fn nonce_consumed_v1_fixture_is_strict_prefix_of_current_schema() {
 
     assert_append_only(&v1, &current).expect("current schema must preserve v1 field order");
     assert!(current.len() > v1.len(), "current schema must append fields");
-    assert_eq!(current.last().map(String::as_str), Some("batch_nonce"));
+    assert_eq!(current.last().map(String::as_str), Some("contract_id"));
     assert_schema_version(current_snapshot, NONCE_CONSUMED_EVENT_SCHEMA_VERSION)
         .expect("fixture must carry the event type's version");
 }

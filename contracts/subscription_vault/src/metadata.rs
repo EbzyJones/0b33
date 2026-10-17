@@ -158,6 +158,7 @@ pub fn do_set_metadata_signed(
             nonce: payload.nonce,
             timestamp: now,
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -356,6 +357,7 @@ pub fn set_metadata(
             key,
             authorizer: caller.clone(),
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -408,6 +410,7 @@ pub fn delete_metadata(
                 key,
                 authorizer: caller.clone(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
     }

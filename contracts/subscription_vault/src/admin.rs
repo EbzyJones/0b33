@@ -141,6 +141,7 @@ pub fn enforce_config_cooldown(env: &Env, key_label: &str) -> Result<u64, Error>
             prev_ts,
             timestamp: now,
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -347,6 +348,7 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
             new_min_topup: min_topup,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -402,6 +404,7 @@ pub(crate) fn apply_dispute_window_secs(env: &Env, window_secs: u64) -> Result<(
             new_window_secs: window_secs,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -751,6 +754,7 @@ pub fn do_rotate_admin(
             new_admin,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -832,6 +836,7 @@ pub fn do_recover_stranded_funds(
         // `require_admin_auth` above already pinned this call to the admin
         // path, so the role is emitted rather than derived from caller input.
         initiator_role: RecoveryInitiatorRole::Admin,
+        contract_id: env.current_contract_address(),
     };
 
     env.events().publish(
@@ -907,6 +912,7 @@ pub fn queue_treasury_change(
             effective_at,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -938,6 +944,7 @@ pub fn execute_treasury_change(env: &Env, admin: Address) -> Result<(), Error> {
             effective_at: pending.effective_at,
             timestamp: now,
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -1000,6 +1007,7 @@ pub fn set_fee_token(
             fee_token,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -1080,6 +1088,7 @@ pub fn do_propose_admin(env: &Env, current_admin: Address, new_admin: Address) -
             new_admin,
             expires_at: proposal.expires_at,
             timestamp: now,
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -1119,6 +1128,7 @@ pub fn do_claim_admin_role(env: &Env, claimant: Address) -> Result<(), Error> {
             old_admin,
             new_admin: claimant,
             timestamp: now,
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -1143,6 +1153,7 @@ pub fn do_cancel_admin_proposal(env: &Env, admin: Address) -> Result<(), Error> 
         AdminProposalCancelledEvent {
             admin,
             timestamp: env.ledger().timestamp(),
+            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -1423,6 +1434,7 @@ pub fn migrate_config_to_persistent(env: &Env, admin: Address) -> Result<(), Err
             to_version: 3,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
@@ -1575,6 +1587,7 @@ pub fn do_migrate(
             to_version: binary_version,
             timestamp: env.ledger().timestamp(),
             schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
 
