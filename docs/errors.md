@@ -73,8 +73,8 @@
 | 7005 | `UnknownMerchantTag` | Merchant config | Tag is not present in the admin-controlled tag allowlist. | Fix input; use only tags returned by `get_tag_allowlist`. |
 | 7006 | `DuplicateMerchantTag` | Merchant config | The same tag appears more than once in one `set_merchant_tags`/`set_tag_allowlist` call. | Remove the repeated tag and retry. |
 | 9001 | `CannotChangeUsageMode` | Subscription update | Attempting to toggle usage_enabled on an existing subscription. | Cannot toggle usage_enabled on an existing subscription; create a new one. |
-| 9101 | `SchemaMigrationDowngrade` | Schema migration | Stored schema version is newer than the binary. | Downgrade rejected; deploy the correct binary version. |
-| 9102 | `SchemaVersionMismatch` | Schema migration | Stored schema version does not match expected version. | Migration rejected; deploy compatible binary. |
+| 9101 | `SchemaMigrationDowngrade` | Schema migration | `migrate_config_to_persistent` was called with a stored schema version greater than 3. | The stored version is unchanged; use a binary and migration path compatible with the on-chain schema. Do not lower the schema marker manually. |
+| 9102 | `SchemaVersionMismatch` | Schema migration | `migrate` was called with a stored schema version newer than the binary. | The stored version is unchanged; deploy a binary that supports the on-chain schema. Do not lower the schema marker manually. |
 | 9103 | `SchemaMigrationVerificationFailed` | Schema migration | Post-migration storage invariants did not pass verification. | Treat as terminal; investigate migrated storage before retrying. |
 | 10001 | `DisputeNotFound` | Not found | No dispute for the given ID. | Verify dispute ID. |
 | 10002 | `DisputeAlreadyResolved` | State transition | Dispute has already been resolved. | Do not retry; inspect resolution. |
@@ -205,8 +205,8 @@ Column definitions:
 | 8001 | `InvalidTokenDecimals` | Token | `admin.rs`, `test_decimal_normalization.rs`, `types.rs` | Fix token_decimals; must be in [1, 19]. | — |
 | 8002 | `InvalidToken` | Token | `admin.rs`, `test_decimal_normalization.rs`, `types.rs` | Provide an accepted token address from list_accepted_tokens. | — |
 | 9001 | `CannotChangeUsageMode` | Subscription Update | `subscription.rs` | Cannot toggle usage_enabled on an existing subscription; create a new one. | — |
-| 9101 | `SchemaMigrationDowngrade` | Schema Migration | `admin.rs`, `test_config_migration.rs` | Downgrade rejected; deploy the correct binary version. | SchemaMigratedEvent |
-| 9102 | `SchemaVersionMismatch` | Schema Migration | `admin.rs`, `test.rs`, `test_config_migration.rs` | Migration rejected; deploy compatible binary. | — |
+| 9101 | `SchemaMigrationDowngrade` | Schema Migration | `admin.rs`, `test_config_migration.rs` | Stored version remains unchanged; deploy a binary and use a migration path compatible with the on-chain schema. Do not lower the marker manually. | SchemaMigratedEvent |
+| 9102 | `SchemaVersionMismatch` | Schema Migration | `admin.rs`, `test.rs`, `test_config_migration.rs` | Stored version remains unchanged; deploy a binary that supports the on-chain schema. Do not lower the marker manually. | — |
 | 9103 | `SchemaMigrationVerificationFailed` | Schema Migration | `admin.rs`, `test.rs` | Treat as terminal; investigate migrated storage before retrying. | — |
 | 10001 | `DisputeNotFound` | Dispute | `dispute.rs`, `lib.rs`, `test.rs`, `test_dispute_matrix.rs` | Verify dispute ID before retrying. | — |
 | 10002 | `DisputeAlreadyResolved` | Dispute | `dispute.rs`, `lib.rs`, `test.rs`, `test_dispute_matrix.rs` | Inspect existing resolution; do not retry. | DisputeResolvedEvent |
