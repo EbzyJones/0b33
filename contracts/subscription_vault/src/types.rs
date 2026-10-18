@@ -3449,6 +3449,42 @@ pub struct TokenEarnings {
     pub refunds: i128,
 }
 
+/// Sub-account balance entry for a merchant sub-account.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubAccountBalance {
+    pub label: Symbol,
+    pub balance: i128,
+}
+
+/// Per-token earnings breakdown for a sub-account.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubAccountTokenEarnings {
+    pub label: Symbol,
+    pub token: Address,
+    pub balance: i128,
+}
+
+/// Merchant earnings with explicit primary/sub-account breakdown.
+///
+/// Off-chain reporters should use this to understand the split:
+/// - `primary_balance` - funds in the primary merchant account (immediately withdrawable)
+/// - `sub_account_balances` - funds isolated in sub-accounts (per label)
+/// - `total_balance` - sum of primary + all sub-accounts (for reconciliation)
+///
+/// The parent's `TokenEarnings` records the full accrual (primary + sub-accounts)
+/// but `primary_balance` may be less than total accruals due to sub-account routing.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MerchantTokenEarningsWithSubAccounts {
+    pub token: Address,
+    pub primary_earnings: TokenEarnings,
+    pub primary_balance: i128,
+    pub sub_account_balances: Vec<SubAccountBalance>,
+    pub total_balance: i128,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TokenLiabilities {
