@@ -216,6 +216,39 @@ fn test_subscriber_list_scan_depth_boundary() {
 }
 
 #[test]
+fn test_recoverable_scan_depth_within_production_budget() {
+    let (env, client, token, _) = setup();
+    let other = Address::generate(&env);
+    inject_subscriptions(&env, &client.address, MAX_SCAN_DEPTH + 10, &other, &token);
+
+    // Exclude setup and populated fixture work, then enforce the documented query budget.
+    env.budget().reset_unlimited();
+    env.budget()
+        .set_cpu_budget(perf_budgets::LIST_SUBSCRIBER_CPU);
+    env.budget()
+        .set_ledger_read_budget(perf_budgets::LIST_SUBSCRIBER_LEDGER_READS);
+    env.budget().set_ledger_write_budget(0);
+
+    let page = client.list_recoverable_subscriptions(&None, &10);
+
+    assert!(page.subscriptions.is_empty());
+    assert_eq!(page.next_cursor, Some(MAX_SCAN_DEPTH));
+
+    let cpu = env.budget().cpu_instruction_count();
+    let reads = env.budget().ledger_read_count();
+    assert!(
+        cpu <= perf_budgets::LIST_SUBSCRIBER_CPU,
+        "recoverable scan used {cpu} CPU instructions, limit is {}",
+        perf_budgets::LIST_SUBSCRIBER_CPU
+    );
+    assert!(
+        reads <= perf_budgets::LIST_SUBSCRIBER_LEDGER_READS,
+        "recoverable scan used {reads} ledger reads, limit is {}",
+        perf_budgets::LIST_SUBSCRIBER_LEDGER_READS
+    );
+}
+
+#[test]
 fn test_subscriber_list_sparse_ids() {
     let (env, client, token, _) = setup();
     let subscriber = Address::generate(&env);
