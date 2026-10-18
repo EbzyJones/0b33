@@ -104,13 +104,21 @@ pub struct IdemRingBuffer {
 
 `entries` contains tuples of `(domain-separated SHA-256 fingerprint, ledger timestamp at insertion)`.
 The buffer retains at most `IDEM_HISTORY = 64` entries per subscription.
-When full, inserting a new fingerprint silently overwrites the oldest slot at `cursor`;
-the cursor then advances modulo `IDEM_HISTORY`.
+Before each insertion, expired entries (older than `IDEM_TTL_SECS`) are pruned.
+If the buffer is still at capacity after pruning — meaning all 64 retained entries are
+within the active TTL window — the insertion is **rejected** with `Error::IdemBufferFull`
+(code 6019) rather than silently overwriting the oldest live slot.  Evicting a live slot
+would open a replay window: an attacker who triggered the eviction could replay the evicted
+key as a fresh charge.
 
 Entries older than `IDEM_TTL_SECS = 7 days` are skipped on lookup and treated as absent,
 regardless of ring position. Replay protection is therefore bounded by **both** time and count:
-a key is protected for up to 7 days from insertion, or until 64 newer keys have overwritten
-its slot — whichever comes first. A missing key (empty buffer or deserialization failure
+a key is protected for up to 7 days from insertion.  A subscription can hold at most 64 live
+keys simultaneously; under normal billing cadences (daily or slower) this limit is never
+reached.  Filling 64 slots within the 7-day window requires a charge every ~2.6 hours, which
+is well above any supported subscription billing frequency.
+
+A missing key (empty buffer or deserialization failure
 from a pre-migration on-chain buffer) initializes to an empty buffer on the first insertion.
 
 The hash includes the operation domain, subscription ID, and raw 32-byte key,
