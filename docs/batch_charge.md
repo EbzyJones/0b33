@@ -22,8 +22,14 @@ before any id is processed.
 | `subscription_ids.len()` | Behaviour |
 |--------------------------|-----------|
 | `0` | No-op. Returns an empty vector; the nonce is **not** consumed. |
-| `1 ..= 100` | Processed normally (subject to the duplicate-id rule below). |
+| `1 ..= 50` | Processed normally (subject to the duplicate-id rule below). |
+| `51 ..= 100` | Processed normally (subject to duplicate-id validation) and emits a `batch_size_warning` event. |
 | `> 100` | Rejected wholesale with `Error::InvalidInput` (code `3002`). No id is charged, no result vector is returned, and the nonce is **not** consumed. |
+
+The warning event payload includes `batch_size`, `recommended_max_size` (50),
+`schema_version`, and `contract_id`. It is emitted only for a valid batch that
+passes input validation and the nonce check; it does not change the result
+shape or reject the batch.
 
 ### Why the cap exists
 
@@ -42,7 +48,7 @@ split the batch and retry with the same nonce.
 ### Sizing guidance
 
 - **Hard ceiling:** 100 ids.
-- **Recommended working size:** ~50 ids or fewer. Per-item cost is not uniform
+- **Recommended working size:** 50 ids or fewer. Per-item cost is not uniform
   — a cold subscription read is more expensive than a warm one — so a batch
   near the ceiling is more likely to approach the network instruction budget.
 - **Batching pattern:** chunk a larger billing run into ceil(N / 50) calls of

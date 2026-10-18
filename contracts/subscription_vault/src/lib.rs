@@ -694,8 +694,9 @@ pub use queries::{
 pub use state_machine::{can_transition, get_allowed_transitions, validate_status_transition};
 pub use types::{
     AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
-    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
-    BatchWithdrawResult, BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent,
+    BatchChargeResult, BatchSizeWarningEvent, BatchWithdrawResult, BillingChargeKind,
+    BillingCompactedEvent, BillingCompactionSummary,
     BillingPeriodSnapshot, BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
     BillingStatementsPage, BulkSubscriptionResult, CapInfo, ChargeExecutionResult,
     ChargeFailureEvent, ContractSnapshot, Coupon, DataKey, DiscountAppliedEvent,
@@ -751,6 +752,13 @@ pub use types::{
 /// See `types::BATCH_MAX_SIZE` for the full rationale and
 /// `docs/batch_charge.md` for integrator guidance.
 pub const BATCH_MAX_SIZE: u32 = types::BATCH_MAX_SIZE;
+
+/// Recommended maximum number of IDs in a `batch_charge` call.
+///
+/// Larger batches remain valid up to [`BATCH_MAX_SIZE`], but emit a
+/// [`BatchSizeWarningEvent`] so callers can detect that they exceed the
+/// integration guide's recommended size.
+pub const BATCH_RECOMMENDED_SIZE: u32 = types::BATCH_RECOMMENDED_SIZE;
 
 /// Maximum subscription ID this contract will ever allocate.
 pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
@@ -1058,6 +1066,8 @@ impl SubscriptionVault {
     /// contract-level cap an oversized batch would abort with a generic
     /// execution error that a caller cannot distinguish from out-of-gas.
     /// Split the batch and retry with a fresh nonce. See `docs/batch_charge.md`.
+    /// Accepted batches above [`BATCH_RECOMMENDED_SIZE`] (50) emit a
+    /// `batch_size_warning` event; they are still processed normally.
     ///
     /// An empty batch is a no-op that returns an empty vector.
     ///
