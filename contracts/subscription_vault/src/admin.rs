@@ -558,6 +558,7 @@ pub(crate) fn read_cached_admin_config(env: &Env) -> Result<CachedAdminConfig, E
 pub(crate) fn execute_batch_charge(
     env: &Env,
     subscription_ids: &Vec<u32>,
+    idem_keys: Option<&Vec<soroban_sdk::BytesN<32>>>,
 ) -> Vec<BatchChargeResult> {
     if subscription_ids.len() > BATCH_RECOMMENDED_SIZE {
         env.events().publish(
@@ -581,12 +582,17 @@ pub(crate) fn execute_batch_charge(
     // Cache oracle prices per (merchant, token) pair so subscriptions sharing a
     // merchant and token within the batch don't redundantly re-query the oracle.
     let mut price_cache: std::vec::Vec<(Address, Address, u128)> = std::vec::Vec::new();
-    for id in subscription_ids.iter() {
+    for (idx, id) in subscription_ids.iter().enumerate() {
         let admin_ref = match &cached_admin {
             Ok(cfg) => Some(cfg),
             Err(_) => None,
         };
-        let r = charge_one(env, id, now, None, admin_ref, Some(&mut merchant_cache));
+        // Extract the per-subscription idempotency key for this position, if
+        // the caller supplied an idem_keys vector.  A missing entry at index
+        // `idx` (shorter keys vec) is silently treated as no key for that ID.
+        let idem_key: Option<soroban_sdk::BytesN<32>> = idem_keys
+            .and_then(|keys| keys.get(idx as u32));
+        let r = charge_one(env, id, now, idem_key, admin_ref, Some(&mut merchant_cache));
         let res = match r {
             Ok(ChargeExecutionResult::Charged) => BatchChargeResult {
                 success: true,
@@ -642,6 +648,7 @@ pub(crate) fn execute_batch_charge(
 pub fn do_batch_charge(
     env: &Env,
     subscription_ids: &Vec<u32>,
+    idem_keys: Option<&Vec<soroban_sdk::BytesN<32>>>,
     nonce: u64,
 ) -> Result<Vec<BatchChargeResult>, Error> {
     let admin = require_stored_admin_auth(env)?;
@@ -657,6 +664,14 @@ pub fn do_batch_charge(
     // Empty batch is allowed as a no-op
     if subscription_ids.len() == 0 {
         return Ok(Vec::new(env));
+    }
+
+    // When idem_keys are supplied their count must match subscription_ids exactly
+    // so that each key maps unambiguously to one ID by position.
+    if let Some(keys) = idem_keys {
+        if keys.len() != subscription_ids.len() {
+            return Err(Error::InvalidInput);
+        }
     }
 
     // Check for duplicate IDs and reject the entire batch if found
@@ -679,7 +694,7 @@ pub fn do_batch_charge(
         return Err(error);
     }
 
-    let results = execute_batch_charge(env, subscription_ids);
+    let results = execute_batch_charge(env, subscription_ids, idem_keys);
     env.storage().instance().remove(&batch_nonce_key);
     Ok(results)
 }

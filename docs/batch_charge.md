@@ -8,6 +8,7 @@ admin-only and is guarded by the emergency stop flag.
 pub fn batch_charge(
 	env: Env,
 	subscription_ids: Vec<u32>,
+	idem_keys: Option<Vec<BytesN<32>>>,
 	nonce: u64,
 ) -> Result<Vec<BatchChargeResult>, Error>
 ```
@@ -62,13 +63,13 @@ Both argument-shape checks — batch length and duplicate ids — run **before**
 the nonce is consumed. A rejected batch therefore leaves no trace:
 
 ```
-attempt 1: batch_charge([...101 ids...], nonce=7)
+attempt 1: batch_charge([...101 ids...], None, nonce=7)
   → Err(InvalidInput)         // oversized
   // nonce 7 is still unused
 
-attempt 2: batch_charge([...50 ids...], nonce=7)   // chunk 1
+attempt 2: batch_charge([...50 ids...], None, nonce=7)   // chunk 1
   → Ok([...])
-attempt 3: batch_charge([...51 ids...], nonce=8)   // chunk 2
+attempt 3: batch_charge([...51 ids...], None, nonce=8)   // chunk 2
   → Ok([...])
 ```
 
@@ -79,6 +80,68 @@ its nonce, so a retry of a partially-successful batch needs a fresh one (see
 
 For idempotency-key semantics and why double-charging is prevented, see
 [`replay_protection.md`](replay_protection.md).
+
+## Per-subscription idempotency keys
+
+The optional `idem_keys` parameter accepts a `Vec<BytesN<32>>` that is
+**parallel to `subscription_ids`** — same length, same order. When supplied,
+each subscription is charged through the same idempotency-key machinery used
+by the single-charge `charge_subscription` entrypoint.
+
+### How it works
+
+- Before `charge_one` runs for position *i*, the contract checks whether
+  `idem_keys[i]` has already been recorded for `subscription_ids[i]` within
+  the active TTL window (default: 7 days, configurable via `set_idempotency_ttl`).
+- **Key already seen:** the charge is silently skipped. The result at position
+  *i* is `success = true, error_code = 0` — an idempotent no-op.
+- **Key is fresh:** if the charge succeeds, the key is recorded. On failure the
+  key is not recorded (a failed charge can be retried with the same key).
+
+Keys are scoped per `(subscription_id, domain)`, so the same 32-byte value can
+be reused safely across different subscriptions or different entrypoints without
+collision.
+
+### When to use idem_keys
+
+The primary use case is **timeout-uncertain retries**: an off-chain billing
+engine submits a batch and receives no response (network timeout). It cannot
+tell whether the transaction landed. With `idem_keys`:
+
+```
+// First attempt (outcome unknown — timeout):
+batch_charge(ids=[10, 11, 12], idem_keys=[k10, k11, k12], nonce=5)
+  → timeout, no response
+
+// Retry with a fresh nonce; same idem_keys:
+batch_charge(ids=[10, 11, 12], idem_keys=[k10, k11, k12], nonce=6)
+  → Ok([{success:true,..}, {success:true,..}, {success:true,..}])
+  // IDs that were already charged on attempt 1 are silently skipped.
+  // IDs that were not charged are charged now.
+```
+
+Without `idem_keys`, the caller must either use off-chain event indexing to
+determine which IDs were charged, or risk double-charging by blindly
+resubmitting all IDs.
+
+### Length validation
+
+When `idem_keys` is `Some`, its length **must equal** `subscription_ids.len()`.
+A mismatch is rejected with `Error::InvalidInput` before the nonce is consumed,
+so the caller can correct the input and retry with the same nonce.
+
+When `idem_keys` is `None`, behaviour is identical to batches submitted before
+this parameter was introduced: no per-ID replay protection beyond the batch nonce.
+
+### Key generation guidance
+
+- Use a **cryptographically random 32-byte value** per `(subscription_id, billing_cycle)`.
+- A simple construction: `SHA-256(scheduler_run_id || subscription_id || period_start_timestamp)`.
+- Do **not** reuse the same key across different billing periods for the same
+  subscription — the TTL window (default 7 days) protects within a period, but
+  deliberate reuse across periods would silently skip legitimate charges.
+- Store keys alongside the billing job record so they survive the scheduler
+  restart that necessitates a retry.
 
 ## Partial-success model
 
@@ -124,6 +187,12 @@ top up and explicitly resume an underfunded subscription, wait for an interval
 that has not elapsed, or remove/replace an ID that no longer exists. Do not
 blindly retry successful IDs, because their next result may be
 `IntervalNotElapsed` or another state-dependent outcome.
+
+**Timeout-uncertain retries with `idem_keys`:** if the original transaction's
+outcome is unknown (network timeout), pass the same `idem_keys` with a fresh
+nonce. Already-charged subscriptions are silently skipped; uncharged ones are
+processed normally. See [Per-subscription idempotency keys](#per-subscription-idempotency-keys)
+for key generation guidance.
 
 The outer `Result` is an error rather than a result vector when the emergency
 stop is active, authentication fails, or the batch nonce is invalid. In

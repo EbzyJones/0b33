@@ -1056,6 +1056,31 @@ impl SubscriptionVault {
     /// reports, per id, whether it succeeded and (on failure) the error code,
     /// so callers can determine exactly which ids were actually charged.
     ///
+    /// # Per-subscription idempotency keys
+    ///
+    /// The optional `idem_keys` parameter accepts a `Vec<BytesN<32>>` that is
+    /// parallel to `subscription_ids` (same length, same order). When supplied,
+    /// each ID is charged through the same idempotency-key machinery as the
+    /// single-charge `charge_subscription` entrypoint:
+    ///
+    /// - If the key for position *i* has already been recorded for that
+    ///   subscription (within the configured TTL window), the charge is skipped
+    ///   and the result at position *i* is `success = true, error_code = 0`
+    ///   (idempotent no-op).
+    /// - If the key is fresh, it is recorded on a successful charge.
+    ///
+    /// This allows a caller that timed out and cannot confirm whether a
+    /// transaction landed to resubmit the same `(subscription_ids, idem_keys)`
+    /// pair with a **new nonce**: subscriptions that were already charged are
+    /// silently skipped; those that were not are charged normally.
+    ///
+    /// When `idem_keys` is `None`, behaviour is identical to before this
+    /// parameter was added (no per-ID replay protection beyond the batch nonce).
+    ///
+    /// When `idem_keys` is `Some`, the vector length must equal
+    /// `subscription_ids.len()`; a mismatch is rejected with
+    /// [`Error::InvalidInput`] before the nonce is consumed.
+    ///
     /// # Batch size
     ///
     /// At most [`BATCH_MAX_SIZE`] (100) ids may be supplied. A longer batch is
@@ -1074,7 +1099,8 @@ impl SubscriptionVault {
     /// # Errors
     ///
     /// * [`Error::InvalidInput`] — More than [`BATCH_MAX_SIZE`] ids supplied,
-    ///   or a duplicate id in the batch.
+    ///   a duplicate id in the batch, or `idem_keys` length does not match
+    ///   `subscription_ids` length.
     /// * [`Error::EmergencyStopActive`] — The emergency stop is engaged; no id
     ///   is charged.
     /// * [`Error::NonceAlreadyUsed`] — The batch nonce was already consumed.
@@ -1084,10 +1110,11 @@ impl SubscriptionVault {
     pub fn batch_charge(
         env: Env,
         subscription_ids: Vec<u32>,
+        idem_keys: Option<Vec<soroban_sdk::BytesN<32>>>,
         nonce: u64,
     ) -> Result<Vec<BatchChargeResult>, Error> {
         require_not_emergency_stop(&env)?;
-        admin::do_batch_charge(&env, &subscription_ids, nonce)
+        admin::do_batch_charge(&env, &subscription_ids, idem_keys.as_ref(), nonce)
     }
 
     // ── Bulk pause / cancel (operational hygiene) ─────────────────────────────
