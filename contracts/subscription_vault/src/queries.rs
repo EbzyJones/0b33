@@ -20,6 +20,7 @@
 //! | `get_merchant_subscription_count` | Index length (u32) | ✅ Yes | None |
 //! | `get_token_subscription_count` | Index length (u32) | ✅ Yes | None |
 //! | `get_subscriptions_by_token` | Slice of subscription records | ✅ Yes | None |
+//! | `list_subscriptions_by_token` | Paginated subscription records with cursor | ✅ Yes | None |
 //! | `get_next_charge_info` | Projected next-charge timestamp and status | ✅ Yes | None |
 //! | `compute_next_charge_info` | Pure computation on a Subscription value | ✅ Yes | None |
 //! | `get_cap_info` | Lifetime cap / charged totals | ✅ Yes | None |
@@ -88,6 +89,9 @@
 //!   direction-specific and must be replayed with the same `reverse` value.
 //! - **`get_subscriptions_by_token`**: Results follow the order of ids in the on-chain index
 //!   (`token_subs`), which is insertion order. `start` is a 0-based offset into that id list.
+//! - **`list_subscriptions_by_token`**: Cursor-based traversal of the same token index in
+//!   insertion order. `cursor` is a 0-based offset (`None` starts at the beginning); continue
+//!   with `next_cursor`. The returned `total` is the token index length.
 //!
 //! ## Read complexity per endpoint
 //!
@@ -99,6 +103,7 @@
 //! | `get_subscriptions_by_merchant_paginated` | 1 + limit | 1 index read + up to `limit` sub reads |
 //! | `get_merchant_subscription_count` | 1 | Index length only |
 //! | `get_subscriptions_by_token` | 1 + limit | 1 index read + up to `limit` sub reads |
+//! | `list_subscriptions_by_token` | 1 + limit | 1 index read + up to `limit` sub reads |
 //! | `get_token_subscription_count` | 1 | Index length only |
 //! | `compute_next_charge_info` | 0 | Pure computation |
 //! | `get_cap_info` | 1 | Calls `get_subscription` |
@@ -106,12 +111,12 @@
 //! | `list_subscriptions_by_subscriber` | 1 + up to MAX_SCAN_DEPTH | 1 index read + capped scan of that subscriber's ids |
 //! | `list_recoverable_subscriptions` | up to MAX_SCAN_DEPTH | Capped full-ID scan; cancelled subs are absent from every secondary index |
 //!
-//! **Index deserialization note**: `get_subscriptions_by_merchant` and
-//! `get_subscriptions_by_token` read the entire index `Vec<u32>` from a single storage
-//! key before slicing it. For merchants or tokens with very large index lists the
-//! deserialization cost grows with the list length, even when only `limit` entries
-//! are needed. Use [`get_merchant_subscription_count`] / [`get_token_subscription_count`]
-//! to estimate index size before paginating.
+//! **Index deserialization note**: merchant and token subscription queries read the
+//! entire index `Vec<u32>` from a single storage key before slicing it. For merchants
+//! or tokens with very large index lists the deserialization cost grows with the list
+//! length, even when only `limit` entries are needed. Use
+//! [`get_merchant_subscription_count`] / [`get_token_subscription_count`] to estimate
+//! index size before paginating.
 //!
 //! ## Key registry: DataKey variants used here
 //! - `DataKey::Sub(u32)`
@@ -124,7 +129,7 @@ use crate::safe_math::{safe_mul, safe_sub};
 use crate::subscription::read_subscription;
 use crate::types::{
     CapInfo, DataKey, Error, NextChargeInfo, Subscription, SubscriptionStatus,
-    SubscriptionsMerchantPage,
+    SubscriptionsMerchantPage, SubscriptionsTokenPage,
 };
 use soroban_sdk::{contracttype, Address, Env, Vec};
 
@@ -393,6 +398,50 @@ pub fn get_subscriptions_by_token(
         }
     }
     Ok(out)
+}
+
+/// Returns subscriptions for a settlement token with cursor-based pagination.
+///
+/// Results follow insertion order in the token index. `cursor` is a 0-based
+/// offset; pass the returned `next_cursor` to fetch the next page. `total`
+/// reports the current number of IDs in the token index.
+///
+/// `limit` must be in `1..=MAX_SUBSCRIPTION_LIST_PAGE`.
+pub fn list_subscriptions_by_token(
+    env: &Env,
+    token: Address,
+    cursor: Option<u32>,
+    limit: u32,
+) -> Result<SubscriptionsTokenPage, Error> {
+    if limit == 0 || limit > MAX_SUBSCRIPTION_LIST_PAGE {
+        return Err(Error::InvalidInput);
+    }
+
+    let key = DataKey::TokenSubs(token);
+    let ids: Vec<u32> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
+    let total = ids.len();
+    let start = cursor.unwrap_or(0);
+    if start >= total {
+        return Ok(SubscriptionsTokenPage {
+            subscriptions: Vec::new(env),
+            next_cursor: None,
+            total,
+        });
+    }
+
+    let end = start.saturating_add(limit).min(total);
+    let mut subscriptions = Vec::new(env);
+    for id in ids.iter().skip(start as usize).take((end - start) as usize) {
+        if let Some(subscription) = read_subscription(env, id) {
+            subscriptions.push_back(subscription);
+        }
+    }
+
+    Ok(SubscriptionsTokenPage {
+        subscriptions,
+        next_cursor: if end < total { Some(end) } else { None },
+        total,
+    })
 }
 
 /// Returns full next charge information for a subscription.

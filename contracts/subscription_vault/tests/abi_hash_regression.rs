@@ -284,6 +284,11 @@ mod abi_hash_regression {
                 name
             );
         }
+
+        assert!(
+            names.contains("list_subscriptions_by_token"),
+            "Token query entrypoint `list_subscriptions_by_token` missing from ABI"
+        );
     }
 
     /// Edge case: a deprecated shim retained for backwards compatibility must

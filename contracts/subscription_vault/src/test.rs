@@ -4656,6 +4656,137 @@ fn test_get_subscriptions_by_token_pagination_and_count() {
     assert_eq!(rest.len(), 1);
 }
 
+#[test]
+fn test_list_subscriptions_by_token_cursor_pagination() {
+    let test_env = TestEnv::default();
+    let token_b = test_env
+        .env
+        .register_stellar_asset_contract_v2(test_env.admin.clone())
+        .address();
+    test_env
+        .client
+        .add_accepted_token(&test_env.admin, &token_b, &6);
+
+    let merchant = Address::generate(&test_env.env);
+    let first_a_subscriber = Address::generate(&test_env.env);
+    let second_a_subscriber = Address::generate(&test_env.env);
+    let third_a_subscriber = Address::generate(&test_env.env);
+    test_env.client.create_subscription(
+        &first_a_subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env.client.create_subscription_with_token(
+        &Address::generate(&test_env.env),
+        &merchant,
+        &token_b,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env.client.create_subscription(
+        &second_a_subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env.client.create_subscription_with_token(
+        &Address::generate(&test_env.env),
+        &merchant,
+        &token_b,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    test_env.client.create_subscription(
+        &third_a_subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+
+    let page1 = test_env
+        .client
+        .list_subscriptions_by_token(&test_env.token, &None::<u32>, &2);
+    assert_eq!(page1.total, 3);
+    assert_eq!(page1.subscriptions.len(), 2);
+    assert_eq!(
+        page1.subscriptions.get(0).unwrap().subscriber,
+        first_a_subscriber
+    );
+    assert_eq!(
+        page1.subscriptions.get(1).unwrap().subscriber,
+        second_a_subscriber
+    );
+    assert_eq!(page1.next_cursor, Some(2));
+
+    let page2 = test_env
+        .client
+        .list_subscriptions_by_token(&test_env.token, &page1.next_cursor, &2);
+    assert_eq!(page2.total, 3);
+    assert_eq!(page2.subscriptions.len(), 1);
+    assert_eq!(
+        page2.subscriptions.get(0).unwrap().subscriber,
+        third_a_subscriber
+    );
+    assert_eq!(page2.next_cursor, None);
+
+    let token_b_page = test_env
+        .client
+        .list_subscriptions_by_token(&token_b, &None::<u32>, &2);
+    assert_eq!(token_b_page.total, 2);
+    assert_eq!(token_b_page.subscriptions.len(), 2);
+    assert!(token_b_page
+        .subscriptions
+        .iter()
+        .all(|sub| sub.token == token_b));
+    assert!(page1
+        .subscriptions
+        .iter()
+        .all(|sub| sub.token == test_env.token));
+
+    let empty = test_env
+        .client
+        .list_subscriptions_by_token(&test_env.token, &Some(3), &2);
+    assert!(empty.subscriptions.is_empty());
+    assert_eq!(empty.total, 3);
+    assert_eq!(empty.next_cursor, None);
+
+    assert_eq!(
+        test_env
+            .client
+            .try_list_subscriptions_by_token(&test_env.token, &None::<u32>, &0),
+        Err(Ok(Error::InvalidInput))
+    );
+    assert_eq!(
+        test_env.client.try_list_subscriptions_by_token(
+            &test_env.token,
+            &None::<u32>,
+            &(MAX_SUBSCRIPTION_LIST_PAGE + 1)
+        ),
+        Err(Ok(Error::InvalidInput))
+    );
+}
+
 // -- Subscriber withdrawal test -----------------------------------------------
 
 #[test]
