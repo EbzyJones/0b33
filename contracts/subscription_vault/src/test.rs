@@ -1800,7 +1800,7 @@ fn test_merchant_blocklist_charge_continuity_soft_freeze() {
     test_env.client.deposit_funds(&sub_id, &(AMOUNT * 10), &None::<soroban_sdk::BytesN<32>>);
     
     // First charge should succeed
-    let first_charge = test_env.client.charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
+    let first_charge = test_env.client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
     assert!(first_charge.is_ok());
     let first_balance = test_env.client.get_merchant_balance(&merchant);
     assert!(first_balance > 0);
@@ -1822,7 +1822,7 @@ fn test_merchant_blocklist_charge_continuity_soft_freeze() {
     
     // Second charge should STILL SUCCEED (not block for merchant blocklist)
     // The charge completes and credits accumulate
-    let second_charge = test_env.client.charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
+    let second_charge = test_env.client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
     assert!(second_charge.is_ok());
     
     // Balance should have increased from the second charge
