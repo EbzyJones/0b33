@@ -7,7 +7,8 @@ use soroban_sdk::{
     Address, Env, FromVal, Symbol,
 };
 use subscription_vault::{
-    AdminRotatedEvent, SubscriptionCreatedEvent, SubscriptionVault, SubscriptionVaultClient,
+    AdminRotatedEvent, BatchSizeWarningEvent, SubscriptionCreatedEvent, SubscriptionVault,
+    SubscriptionVaultClient,
     BASE_EVENT_SCHEMA_VERSION, NONCE_CONSUMED_EVENT_SCHEMA_VERSION,
     SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION, BlocklistAddedEvent, BlocklistRemovedEvent,
     NonceConsumedEvent,
@@ -15,8 +16,62 @@ use subscription_vault::{
     FundsDepositedEvent, MerchantWithdrawalEvent, SubscriberWithdrawalEvent,
     GracePeriodEnteredEvent, SubscriptionResumedEvent, EmergencyStopEnabledEvent,
     EmergencyStopDisabledEvent, EmergencyStopEvent, AdminProposalCreatedEvent,
-    ReferralAttributedEvent,
+    ReferralAttributedEvent, BATCH_RECOMMENDED_SIZE,
 };
+
+#[test]
+fn batch_charge_emits_size_warning_only_above_recommended_size() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+    let admin = Address::generate(&env);
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    client.init(&token, &6, &admin, &1_000_000i128, &3600u64);
+
+    let mut recommended_batch = soroban_sdk::Vec::new(&env);
+    for id in 0..BATCH_RECOMMENDED_SIZE {
+        recommended_batch.push_back(id);
+    }
+    client.batch_charge(&recommended_batch, &0u64);
+    assert!(!env.events().all().iter().any(|(_, topics, _)| {
+        topics
+            .get(0)
+            .map(|topic| {
+                Symbol::from_val(&env, &topic) == Symbol::new(&env, "batch_size_warning")
+            })
+            .unwrap_or(false)
+    }));
+
+    let mut oversized_recommended_batch = soroban_sdk::Vec::new(&env);
+    for id in 0..=BATCH_RECOMMENDED_SIZE {
+        oversized_recommended_batch.push_back(id);
+    }
+    client.batch_charge(&oversized_recommended_batch, &1u64);
+
+    let warning = env
+        .events()
+        .all()
+        .iter()
+        .find(|(_, topics, _)| {
+            topics
+                .get(0)
+                .map(|topic| {
+                    Symbol::from_val(&env, &topic) == Symbol::new(&env, "batch_size_warning")
+                })
+                .unwrap_or(false)
+        })
+        .expect("batch above recommended size must emit a warning event");
+    let event: BatchSizeWarningEvent = FromVal::from_val(&env, &warning.2);
+    assert_eq!(event.batch_size, BATCH_RECOMMENDED_SIZE + 1);
+    assert_eq!(event.recommended_max_size, BATCH_RECOMMENDED_SIZE);
+    assert_eq!(event.schema_version, BASE_EVENT_SCHEMA_VERSION);
+    assert_eq!(event.contract_id, contract_id);
+}
 
 #[test]
 fn test_batch_charge_events_include_nonce_and_standalone_events_do_not() {

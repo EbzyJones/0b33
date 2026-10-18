@@ -671,7 +671,10 @@ function run_billing_batch(ids, nonce):
 4. **Persist `success = true` ids before building the next batch.** A crash
    between the chain call and your bookkeeping is the one case where a
    genuinely-safe retry becomes a real double-charge risk in *your* ledgers.
-5. **Cap the batch at 50, not 100.** See
+5. **Cap routine batches at 50, not 100.** Accepted calls above 50 IDs emit a
+   `batch_size_warning` event containing the batch size and recommended maximum;
+   use it to observe callers that exceed the recommendation. It is a soft
+   warning, not a rejection. See
    [`batch_charge.md` → Sizing guidance](batch_charge.md#sizing-guidance).
 
 For the contract-side mechanics — `period_index`, nonce domains, and why

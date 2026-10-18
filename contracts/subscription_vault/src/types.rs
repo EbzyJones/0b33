@@ -70,6 +70,8 @@ pub const MAX_METADATA_VALUE_LENGTH: u32 = 256;
 ///
 /// Documented for integrators in `docs/batch_charge.md`.
 pub const BATCH_MAX_SIZE: u32 = 100;
+/// Recommended maximum batch size before `batch_charge` emits a sizing warning.
+pub const BATCH_RECOMMENDED_SIZE: u32 = 50;
 /// Default cap on concurrent active subscriptions per subscriber (#578).
 /// Admins can override this per-subscriber via `DataKey::SubscriberActiveCapOverride`.
 pub const DEFAULT_SUBSCRIBER_ACTIVE_CAP: u32 = 10;
@@ -2480,6 +2482,16 @@ pub struct SubscriptionChargedEvent {
     pub salt: soroban_sdk::BytesN<32>,
     pub schema_version: u32,
     pub batch_nonce: Option<u64>,
+    pub contract_id: Address,
+}
+
+/// Soft warning emitted when a batch exceeds the recommended number of IDs.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct BatchSizeWarningEvent {
+    pub batch_size: u32,
+    pub recommended_max_size: u32,
+    pub schema_version: u32,
     pub contract_id: Address,
 }
 

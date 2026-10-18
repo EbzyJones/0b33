@@ -10,7 +10,7 @@ use crate::types::{
     DataKey, Error, FeeTokenConfiguredEvent, PendingTreasuryChange, RecoveryEvent,
     RecoveryInitiatorRole, RecoveryReason, RecoveryResult, SchemaMigrationSummary, Subscription,
     TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, BATCH_MAX_SIZE, MAX_PROTOCOL_FEE_BIPS,
-    TOPIC_RECOVERY, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    BATCH_RECOMMENDED_SIZE, TOPIC_RECOVERY, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
@@ -559,6 +559,18 @@ pub(crate) fn execute_batch_charge(
     env: &Env,
     subscription_ids: &Vec<u32>,
 ) -> Vec<BatchChargeResult> {
+    if subscription_ids.len() > BATCH_RECOMMENDED_SIZE {
+        env.events().publish(
+            (Symbol::new(env, "batch_size_warning"),),
+            crate::types::BatchSizeWarningEvent {
+                batch_size: subscription_ids.len(),
+                recommended_max_size: BATCH_RECOMMENDED_SIZE,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
+            },
+        );
+    }
+
     let now = env.ledger().timestamp();
     // Read all admin config values once so they are cached across the batch loop.
     let cached_admin = read_cached_admin_config(env);
