@@ -2615,6 +2615,43 @@ impl SubscriptionVault {
         merchant::get_merchant_token_earnings(&env, &merchant, &token)
     }
 
+    /// Get merchant earnings for a token with sub-account breakdown.
+    ///
+    /// Returns the primary merchant balance, all sub-account balances, and the
+    /// complete earnings history for this merchant-token pair. Off-chain reporters
+    /// should use this to understand the true financial position.
+    pub fn get_merchant_token_earnings_with_sub_accounts(
+        env: Env,
+        merchant: Address,
+        token: Address,
+    ) -> crate::types::MerchantTokenEarningsWithSubAccounts {
+        merchant::get_merchant_token_earnings_with_sub_accounts(&env, &merchant, &token)
+    }
+
+    /// Get all merchant earnings (per token) with sub-account breakdown.
+    ///
+    /// Returns the complete earnings picture for a merchant across all tokens,
+    /// including primary balance, sub-account balances, and accrual history for each.
+    pub fn get_merchant_total_earnings_with_sub_accounts(
+        env: Env,
+        merchant: Address,
+    ) -> Vec<crate::types::MerchantTokenEarningsWithSubAccounts> {
+        merchant::get_merchant_total_earnings_with_sub_accounts(&env, &merchant)
+    }
+
+    /// Get aggregated merchant balance for a token (primary + all sub-accounts).
+    ///
+    /// This returns the total balance the merchant controls for a token, summing
+    /// the primary account and all registered sub-accounts. Useful for quick
+    /// aggregation queries without unpacking the breakdown.
+    pub fn get_merchant_balance_aggregated(
+        env: Env,
+        merchant: Address,
+        token: Address,
+    ) -> i128 {
+        merchant::get_merchant_balance_aggregated(&env, &merchant, &token)
+    }
+
     /// Check if merchant is paused.
     pub fn get_merchant_paused(env: Env, merchant: Address) -> bool {
         merchant::get_merchant_paused(&env, merchant)

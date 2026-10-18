@@ -805,6 +805,86 @@ pub fn get_merchant_total_earnings(env: &Env, merchant: &Address) -> Vec<(Addres
     result
 }
 
+/// Returns the breakdown of merchant earnings for a single token, including
+/// primary balance and all sub-account balances.
+///
+/// This is the recommended query for off-chain reporters to understand the
+/// complete earnings picture:
+/// - `primary_balance`: funds in the primary merchant account
+/// - `sub_account_balances`: funds isolated in registered sub-accounts
+/// - `total_balance`: sum of primary + all sub-accounts
+///
+/// The parent `TokenEarnings` records the total accrual (primary + sub-accounts),
+/// but the split between primary and sub-account storage is shown in the balance
+/// fields. Reconcile using `total_balance == primary_balance + sum(sub_account_balances)`.
+pub fn get_merchant_token_earnings_with_sub_accounts(
+    env: &Env,
+    merchant: &Address,
+    token: &Address,
+) -> crate::types::MerchantTokenEarningsWithSubAccounts {
+    let primary_earnings = get_merchant_token_earnings(env, merchant, token);
+    let primary_balance = get_merchant_balance_by_token(env, merchant, token);
+
+    // Fetch all sub-account labels and their balances
+    let sub_list_key = DataKey::MerchantSubAccountList(merchant.clone());
+    let labels: Vec<Symbol> = env.storage().instance().get(&sub_list_key).unwrap_or(Vec::new(env));
+
+    let mut sub_account_balances = Vec::new(env);
+    let mut total_sub_balance: i128 = 0;
+
+    for label in labels.iter() {
+        let balance = get_sub_account_balance(env, merchant, &label);
+        if balance > 0 {
+            sub_account_balances.push_back(crate::types::SubAccountBalance {
+                label: label.clone(),
+                balance,
+            });
+            total_sub_balance = total_sub_balance.saturating_add(balance);
+        }
+    }
+
+    let total_balance = primary_balance.saturating_add(total_sub_balance);
+
+    crate::types::MerchantTokenEarningsWithSubAccounts {
+        token: token.clone(),
+        primary_earnings,
+        primary_balance,
+        sub_account_balances,
+        total_balance,
+    }
+}
+
+/// Returns per-token earnings with sub-account breakdown for a merchant.
+///
+/// This is the full breakdown query: for each token the merchant has earned from,
+/// returns the primary balance, sub-account balances, and accrual history.
+pub fn get_merchant_total_earnings_with_sub_accounts(
+    env: &Env,
+    merchant: &Address,
+) -> Vec<crate::types::MerchantTokenEarningsWithSubAccounts> {
+    let key = DataKey::MerchantTokens(merchant.clone());
+    let tokens: Vec<Address> = env.storage().instance().get(&key).unwrap_or(Vec::new(env));
+    let mut result = Vec::new(env);
+    for token in tokens.iter() {
+        let breakdown = get_merchant_token_earnings_with_sub_accounts(env, merchant, &token);
+        result.push_back(breakdown);
+    }
+    result
+}
+
+/// Returns aggregated merchant balance for a token, including all sub-accounts.
+///
+/// This is the total balance available for all merchant operations (withdrawals, etc.):
+/// `aggregated_balance = primary_balance + sum(sub_account_balances)`
+///
+/// Note: The parent `TokenEarnings` already include sub-account amounts (for roll-up
+/// reporting), but they are stored in separate buckets. This function returns the
+/// practical total of all funds the merchant controls for this token.
+pub fn get_merchant_balance_aggregated(env: &Env, merchant: &Address, token: &Address) -> i128 {
+    let breakdown = get_merchant_token_earnings_with_sub_accounts(env, merchant, token);
+    breakdown.total_balance
+}
+
 pub fn get_reconciliation_snapshot(
     env: &Env,
     merchant: &Address,
