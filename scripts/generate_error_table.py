@@ -163,6 +163,7 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "DisputeAlreadyResponded":        ("Dispute is not in `Open` status; cannot respond twice.", "DisputeRespondedEvent", False),
     "DisputeOverpay":                  ("Fix the resolution split so total disbursed does not exceed the escrowed amount.", "DisputeResolvedEvent", False),
     "SubscriberHasOpenDisputes":      ("Resolve the subscriber's open disputes before requesting blocklist removal.", "DisputeResolvedEvent", False),
+    "DisputeAmountExceedsMerchantBalance": ("Fix the dispute resolution amount; merchant balance is insufficient to cover the payout.", "DisputeResolvedEvent", False),
     # Subscription transfer (11000-11099)
     "TransferIntentNotFound":         ("Verify transfer initiation or expiry before retrying.", "—", False),
     "TransferIntentExpired":          ("Transfer intent has expired; initiate a new transfer.", "—", False),

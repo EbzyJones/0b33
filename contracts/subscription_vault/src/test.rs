@@ -1772,6 +1772,75 @@ fn test_remove_from_blocklist_fails_with_open_dispute() {
     assert_eq!(result, Err(Ok(Error::SubscriberHasOpenDisputes)));
 }
 
+#[test]
+fn test_merchant_blocklist_charge_continuity_soft_freeze() {
+    // Verify that blocklisting a merchant does NOT block subsequent charges.
+    // The merchant simply cannot withdraw. This tests the soft-freeze semantics
+    // documented in docs/blocklist.md section 7.
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    test_env
+        .stellar_token_client()
+        .mint(&subscriber, &1_000_000_000i128);
+
+    // Create a subscription
+    let sub_id = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    
+    // Deposit funds to cover charges
+    test_env.client.deposit_funds(&sub_id, &(AMOUNT * 10), &None::<soroban_sdk::BytesN<32>>);
+    
+    // First charge should succeed
+    let first_charge = test_env.client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
+    assert!(first_charge.is_ok());
+    let first_balance = test_env.client.get_merchant_balance(&merchant);
+    assert!(first_balance > 0);
+    
+    // Advance time for next interval
+    test_env.env.ledger().with_mut(|li| {
+        li.timestamp += INTERVAL + 1;
+    });
+    
+    // Blocklist the merchant
+    test_env.client.add_to_blocklist(
+        &test_env.admin,
+        &merchant,
+        &Some(String::from_str(&test_env.env, "Merchant fraud detected")),
+    );
+    
+    // Verify merchant is blocklisted
+    assert!(test_env.client.is_blocklisted(&merchant));
+    
+    // Second charge should STILL SUCCEED (not block for merchant blocklist)
+    // The charge completes and credits accumulate
+    let second_charge = test_env.client.try_charge_subscription(&sub_id, &None::<soroban_sdk::BytesN<32>>);
+    assert!(second_charge.is_ok());
+    
+    // Balance should have increased from the second charge
+    let new_balance = test_env.client.get_merchant_balance(&merchant);
+    assert_eq!(new_balance, first_balance + AMOUNT);
+    
+    // But merchant cannot WITHDRAW their earnings
+    let withdraw_result = test_env.client.try_withdraw_merchant_funds(&merchant, &new_balance);
+    assert_eq!(withdraw_result, Err(Ok(Error::SubscriberBlocklisted)));
+    
+    // After unblocking, merchant can withdraw
+    test_env.client.remove_from_blocklist(&test_env.admin, &merchant);
+    assert!(!test_env.client.is_blocklisted(&merchant));
+    test_env.client.withdraw_merchant_funds(&merchant, &new_balance);
+    let final_balance = test_env.client.get_merchant_balance(&merchant);
+    assert_eq!(final_balance, 0);
+}
+
 // -- Admin tests --------------------------------------------------------------
 
 #[test]
