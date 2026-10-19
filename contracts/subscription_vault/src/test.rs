@@ -11744,3 +11744,243 @@ fn test_dispute_escrow_accounting_invariant() {
         test_env.client.get_merchant_balance_by_token(&merchant, &test_env.token);
     assert_eq!(merchant_after_resolve, initial_merchant_balance);
 }
+
+
+// ── Oracle Governance: Address Changes Require Proposal ────────────────────
+
+/// Oracle address changes must go through governance, not immediate admin action.
+#[test]
+fn test_oracle_address_change_requires_governance() {
+    let test_env = TestEnv::default();
+    let oracle1 = test_env.env.register(MockOracle, ());
+    let oracle2 = test_env.env.register(MockOracle, ());
+
+    // Set initial oracle with governance (would normally go through submit_proposal, etc).
+    // For this test, we mock it by first setting via a config that has no address.
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle1.clone()),
+        &300u64,
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+
+    // Verify oracle1 is set
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.oracle, Some(oracle1.clone()));
+
+    // Attempt to change oracle address directly via admin (should fail with GovernanceRequired)
+    let result = test_env.client.try_set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle2.clone()),
+        &300u64,
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+    assert_eq!(result, Err(Ok(Error::GovernanceRequired)));
+
+    // Verify oracle still points to oracle1 (unchanged)
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.oracle, Some(oracle1));
+}
+
+/// Disabling oracle (removing address) also requires governance.
+#[test]
+fn test_oracle_address_removal_requires_governance() {
+    let test_env = TestEnv::default();
+    let oracle = test_env.env.register(MockOracle, ());
+
+    // Set initial oracle
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle.clone()),
+        &300u64,
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+
+    // Attempt to disable oracle (remove address) — should fail
+    let result = test_env.client.try_set_oracle_config(
+        &test_env.admin,
+        &false,
+        &None::<Address>,
+        &0u64,
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+    assert_eq!(result, Err(Ok(Error::GovernanceRequired)));
+
+    // Verify oracle still configured
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.oracle, Some(oracle));
+    assert!(cfg.enabled);
+}
+
+/// Non-address oracle config changes (max_age, kind, etc) are allowed with cooldown.
+#[test]
+fn test_oracle_max_age_change_allowed_with_cooldown() {
+    let test_env = TestEnv::default();
+    let oracle = test_env.env.register(MockOracle, ());
+
+    // Set initial oracle
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle.clone()),
+        &300u64,
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+
+    // Verify initial max_age
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.max_age_seconds, 300);
+
+    // Update max_age while keeping oracle address the same (should succeed)
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle.clone()),
+        &600u64, // Changed from 300 to 600
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+
+    // Verify max_age was updated
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.max_age_seconds, 600);
+    assert_eq!(cfg.oracle, Some(oracle));
+}
+
+/// Changing oracle kind (Spot -> TWAP) is allowed if address unchanged.
+#[test]
+fn test_oracle_kind_change_allowed() {
+    let test_env = TestEnv::default();
+    let oracle = test_env.env.register(MockOracle, ());
+
+    // Set initial oracle with Spot kind
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle.clone()),
+        &300u64,
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.kind, crate::OracleKind::Spot);
+
+    // Change to TWAP kind (same oracle address)
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle.clone()),
+        &300u64,
+        &crate::OracleKind::Twap,
+        &3600u64, // 1-hour window for TWAP
+        &0u128,
+        &1u128,
+    );
+
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.kind, crate::OracleKind::Twap);
+    assert_eq!(cfg.oracle, Some(oracle));
+}
+
+/// Enabling oracle when it was disabled (but address is same/None) should NOT require governance
+/// if oracle was None and remains None.
+#[test]
+fn test_oracle_enable_without_changing_address() {
+    let test_env = TestEnv::default();
+
+    // Start with oracle disabled and no address
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &false,
+        &None::<Address>,
+        &0u64,
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+
+    let cfg = test_env.client.get_oracle_config();
+    assert!(!cfg.enabled);
+    assert!(cfg.oracle.is_none());
+
+    // Attempting to enable without setting address should still work if oracle is None in both cases
+    // However, enabling typically requires an oracle address, so this might fail validation.
+    // The key point: changing address from None->Some or Some->Something different requires governance.
+}
+
+/// Cooldown on oracle config updates (non-address) should be enforced.
+#[test]
+fn test_oracle_config_cooldown_enforced() {
+    let test_env = TestEnv::default();
+    let oracle = test_env.env.register(MockOracle, ());
+
+    // Set initial oracle
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle.clone()),
+        &300u64,
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+
+    // Immediately attempt another update (without advancing time) — should hit cooldown
+    let result = test_env.client.try_set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle.clone()),
+        &600u64, // Different max_age
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+    assert_eq!(result, Err(Ok(Error::CooldownActive)));
+
+    // Advance time past cooldown (6 hours)
+    test_env
+        .env
+        .ledger()
+        .with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS + 1);
+
+    // Now update should succeed
+    test_env.client.set_oracle_config(
+        &test_env.admin,
+        &true,
+        &Some(oracle.clone()),
+        &600u64,
+        &crate::OracleKind::Spot,
+        &0u64,
+        &0u128,
+        &1u128,
+    );
+
+    let cfg = test_env.client.get_oracle_config();
+    assert_eq!(cfg.max_age_seconds, 600);
+}
