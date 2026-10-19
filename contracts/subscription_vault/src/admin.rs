@@ -8,9 +8,9 @@ use crate::types::{
     AcceptedToken, AdminConfigChangedEvent, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
     DataKey, Error, FeeTokenConfiguredEvent, PendingTreasuryChange, RecoveryEvent,
-    RecoveryInitiatorRole, RecoveryReason, RecoveryResult, SchemaMigrationSummary, Subscription,
+    RecoveryInitiatorRole, RecoveryReason, SchemaMigrationSummary, Subscription, SubscriptionStatus,
     TreasuryChangeExecutedEvent, TreasuryChangeQueuedEvent, BATCH_MAX_SIZE, MAX_PROTOCOL_FEE_BIPS,
-    BATCH_RECOMMENDED_SIZE, TOPIC_RECOVERY, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    TOPIC_RECOVERY, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 use crate::{
     charge_core::{charge_one, charge_usage_one},
@@ -140,8 +140,7 @@ pub fn enforce_config_cooldown(env: &Env, key_label: &str) -> Result<u64, Error>
             key_label: String::from_str(env, key_label),
             prev_ts,
             timestamp: now,
-            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-            contract_id: env.current_contract_address(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -347,8 +346,7 @@ pub fn do_set_min_topup(env: &Env, admin: Address, min_topup: i128) -> Result<()
             old_min_topup,
             new_min_topup: min_topup,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-            contract_id: env.current_contract_address(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -403,8 +401,7 @@ pub(crate) fn apply_dispute_window_secs(env: &Env, window_secs: u64) -> Result<(
             old_window_secs,
             new_window_secs: window_secs,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-            contract_id: env.current_contract_address(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -479,6 +476,21 @@ pub fn remove_accepted_token(env: &Env, admin: Address, token: Address) -> Resul
     let default_token = get_token(env)?;
     if token == default_token {
         return Err(Error::InvalidInput);
+    }
+
+    // A token cannot be removed while any live subscription still references
+    // it; otherwise existing subscriptions could become unchargeable.
+    let token_ids: Vec<u32> = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenSubs(token.clone()))
+        .unwrap_or(Vec::new(env));
+    for id in token_ids.iter() {
+        if let Some(sub) = env.storage().persistent().get::<_, Subscription>(&DataKey::Sub(id)) {
+            if matches!(sub.status, SubscriptionStatus::Active | SubscriptionStatus::GracePeriod) {
+                return Err(Error::InvalidStatusTransition);
+            }
+        }
     }
 
     // Require multi-sig approval for removing tokens
@@ -559,18 +571,6 @@ pub(crate) fn execute_batch_charge(
     env: &Env,
     subscription_ids: &Vec<u32>,
 ) -> Vec<BatchChargeResult> {
-    if subscription_ids.len() > BATCH_RECOMMENDED_SIZE {
-        env.events().publish(
-            (Symbol::new(env, "batch_size_warning"),),
-            crate::types::BatchSizeWarningEvent {
-                batch_size: subscription_ids.len(),
-                recommended_max_size: BATCH_RECOMMENDED_SIZE,
-                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-                contract_id: env.current_contract_address(),
-            },
-        );
-    }
-
     let now = env.ledger().timestamp();
     // Read all admin config values once so they are cached across the batch loop.
     let cached_admin = read_cached_admin_config(env);
@@ -765,8 +765,7 @@ pub fn do_rotate_admin(
             old_admin: current_admin,
             new_admin,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-            contract_id: env.current_contract_address(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -781,48 +780,22 @@ pub fn do_recover_stranded_funds(
     amount: i128,
     recovery_id: String,
     reason: RecoveryReason,
-) -> Result<RecoveryResult, Error> {
+) -> Result<(), Error> {
     require_admin_auth(env, &admin)?;
 
     if amount <= 0 {
         return Err(Error::InvalidRecoveryAmount);
     }
 
-    // Check for replay protection
-    let recovery_key = DataKey::Recovery(recovery_id.clone());
-    if env.storage().persistent().has(&recovery_key) {
-        return Err(Error::Replay);
-    }
-
-    // Recover only unaccounted funds; prepaid balances and other liabilities
-    // remain reserved even when the requested amount is larger.
-    let token_client = token::Client::new(env, &token);
-    let contract_balance = token_client.balance(&env.current_contract_address());
-    let accounted_balance = crate::accounting::get_total_accounted(env, &token);
-
-    let recoverable = contract_balance
-        .checked_sub(accounted_balance)
-        .ok_or(Error::Underflow)?
-        .max(0);
-    let recovered_amount = amount.min(recoverable);
-    let surplus_amount = amount - recovered_amount;
-
-    if recovered_amount == 0 {
-        env.storage().persistent().set(&recovery_key, &true);
-        return Ok(RecoveryResult {
-            recovered_amount,
-            surplus_amount,
-        });
-    }
-
-    // Match guardian approval against the amount that will actually move.
-    // Amounts larger than u32::MAX use the existing saturated proposal key.
-    let amount_u32 = if recovered_amount > u32::MAX as i128 {
+    // Require multi-sig approval for fund recovery
+    // We use the amount truncated to u32 as a reasonable approximation
+    // for the proposal matching. For large amounts, consider splitting.
+    let amount_u32 = if amount > u32::MAX as i128 {
         u32::MAX
     } else {
-        recovered_amount as u32
+        amount as u32
     };
-
+    
     let proposal_id = require_multisig_approval(
         env,
         crate::types::ProposalKind::RecoverStrandedFunds,
@@ -830,6 +803,24 @@ pub fn do_recover_stranded_funds(
         Some(&token),
         amount_u32,
     )?;
+
+    // Check for replay protection
+    let recovery_key = DataKey::Recovery(recovery_id.clone());
+    if env.storage().persistent().has(&recovery_key) {
+        return Err(Error::Replay);
+    }
+
+    // Validate available recoverable balance
+    let token_client = token::Client::new(env, &token);
+    let contract_balance = token_client.balance(&env.current_contract_address());
+    let accounted_balance = crate::accounting::get_total_accounted(env, &token);
+
+    let recoverable = contract_balance
+        .checked_sub(accounted_balance)
+        .ok_or(Error::Underflow)?;
+    if amount > recoverable {
+        return Err(Error::InsufficientBalance);
+    }
 
     // Mark recovery as executed
     env.storage().persistent().set(&recovery_key, &true);
@@ -841,14 +832,13 @@ pub fn do_recover_stranded_funds(
         admin: admin.clone(),
         recipient: recipient.clone(),
         token: token.clone(),
-        amount: recovered_amount,
+        amount,
         reason,
         timestamp: env.ledger().timestamp(),
-        schema_version: crate::types::RECOVERY_EVENT_SCHEMA_VERSION,
+        schema_version: crate::types::EVENT_SCHEMA_VERSION,
         // `require_admin_auth` above already pinned this call to the admin
         // path, so the role is emitted rather than derived from caller input.
         initiator_role: RecoveryInitiatorRole::Admin,
-        contract_id: env.current_contract_address(),
     };
 
     env.events().publish(
@@ -857,12 +847,9 @@ pub fn do_recover_stranded_funds(
     );
 
     // Actual token transfer logic
-    token_client.transfer(&env.current_contract_address(), &recipient, &recovered_amount);
+    token_client.transfer(&env.current_contract_address(), &recipient, &amount);
 
-    Ok(RecoveryResult {
-        recovered_amount,
-        surplus_amount,
-    })
+    Ok(())
 }
 
 // ── Protocol fee helpers ──────────────────────────────────────────────────────
@@ -923,8 +910,7 @@ pub fn queue_treasury_change(
             fee_bps,
             effective_at,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-            contract_id: env.current_contract_address(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -955,8 +941,7 @@ pub fn execute_treasury_change(env: &Env, admin: Address) -> Result<(), Error> {
             fee_bps: pending.new_fee_bps,
             effective_at: pending.effective_at,
             timestamp: now,
-            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-            contract_id: env.current_contract_address(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -1018,8 +1003,7 @@ pub fn set_fee_token(
             admin,
             fee_token,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-            contract_id: env.current_contract_address(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
     Ok(())
@@ -1100,7 +1084,6 @@ pub fn do_propose_admin(env: &Env, current_admin: Address, new_admin: Address) -
             new_admin,
             expires_at: proposal.expires_at,
             timestamp: now,
-            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -1140,7 +1123,6 @@ pub fn do_claim_admin_role(env: &Env, claimant: Address) -> Result<(), Error> {
             old_admin,
             new_admin: claimant,
             timestamp: now,
-            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -1165,7 +1147,6 @@ pub fn do_cancel_admin_proposal(env: &Env, admin: Address) -> Result<(), Error> 
         AdminProposalCancelledEvent {
             admin,
             timestamp: env.ledger().timestamp(),
-            contract_id: env.current_contract_address(),
         },
     );
     Ok(())
@@ -1445,8 +1426,7 @@ pub fn migrate_config_to_persistent(env: &Env, admin: Address) -> Result<(), Err
             from_version: stored_version,
             to_version: 3,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-            contract_id: env.current_contract_address(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
@@ -1598,8 +1578,7 @@ pub fn do_migrate(
             from_version: stored_version,
             to_version: binary_version,
             timestamp: env.ledger().timestamp(),
-            schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
-            contract_id: env.current_contract_address(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
         },
     );
 
