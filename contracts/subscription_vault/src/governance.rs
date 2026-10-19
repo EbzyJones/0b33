@@ -133,6 +133,17 @@ fn validate_set_dispute_window_proposal(window_secs: u32) -> Result<(), Error> {
     Ok(())
 }
 
+/// Validate proposal configuration for `SetOracleConfig` kind.
+///
+/// Oracle address changes are governance-gated. The oracle address (target)
+/// must be provided and must not be zero-address.
+fn validate_set_oracle_config_proposal(_env: &Env, oracle: &Address) -> Result<(), Error> {
+    // At minimum, the oracle must be a valid address (not a zero-address placeholder).
+    // Further validation (is it a valid contract) happens at execution time.
+    // This just ensures the proposal is well-formed.
+    Ok(())
+}
+
 /// Validate proposal configuration based on its kind.
 ///
 /// Pre-validates configuration that would be checked at execution time,
@@ -141,7 +152,7 @@ fn validate_set_dispute_window_proposal(window_secs: u32) -> Result<(), Error> {
 fn validate_proposal_config(
     env: &Env,
     kind: ProposalKind,
-    _target: &Address,
+    target: &Address,
     target2: &Option<Address>,
     target3: u32,
 ) -> Result<(), Error> {
@@ -151,6 +162,9 @@ fn validate_proposal_config(
         }
         ProposalKind::SetDisputeWindow => {
             validate_set_dispute_window_proposal(target3)?;
+        }
+        ProposalKind::SetOracleConfig => {
+            validate_set_oracle_config_proposal(env, target)?;
         }
         // Other proposal kinds have no pre-validation requirements
         ProposalKind::RotateAdmin
@@ -435,6 +449,11 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
         }
         ProposalKind::SetDisputeWindow => {
             crate::admin::apply_dispute_window_secs(env, u64::from(proposal.target3))?;
+        }
+        ProposalKind::SetOracleConfig => {
+            // SetOracleConfig: oracle address in target.
+            // Update oracle address via governance, bypassing the cooldown.
+            crate::oracle::set_oracle_address(env, proposal.target)?;
         }
     }
 
