@@ -61,6 +61,8 @@ mod test_governance;
 mod test_merchant_query_ordering;
 #[cfg(test)]
 mod test_subscription_transfer;
+#[cfg(test)]
+mod test_emergency_stop_concurrent_charge;
 mod types;
 mod validation;
 
