@@ -1813,6 +1813,15 @@ pub struct SubscriptionsMerchantPage {
     pub total: u32,
 }
 
+/// Paginated result for subscriptions indexed by settlement token.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SubscriptionsTokenPage {
+    pub subscriptions: Vec<Subscription>,
+    pub next_cursor: Option<u32>,
+    pub total: u32,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BillingRetentionConfig {

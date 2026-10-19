@@ -724,6 +724,7 @@ pub use types::{
     SubscriptionCreatedEvent, SubscriptionExpiredEvent,
     SubscriptionMigratedEvent, SubscriptionPausedEvent, SubscriptionRecoveryReadyEvent,
     SubscriptionResumedEvent, SubscriptionStatus, SubscriptionSummary, SubscriptionTransferredEvent,
+    SubscriptionsTokenPage,
     TagAllowlistUpdatedEvent, TransferIntent, TransferIntentCreatedEvent, TransferVetoedEvent,
     TokenEarnings, TokenLiabilities, TokenReconciliationSnapshot, UsageChargeResult, UsageLimits,
     UsageState, UsageStatementEvent, CANCELLATION_ESCROW_WINDOW_SECS, DEFAULT_ALLOWED_OPS,
@@ -3319,6 +3320,20 @@ impl SubscriptionVault {
         limit: u32,
     ) -> Result<Vec<Subscription>, Error> {
         queries::get_subscriptions_by_token(&env, token, start, limit)
+    }
+
+    /// List subscriptions indexed under a settlement token with cursor pagination.
+    ///
+    /// `cursor` is the offset returned as `next_cursor` by the previous page;
+    /// pass `None` to start at the beginning. Results follow token-index
+    /// insertion order.
+    pub fn list_subscriptions_by_token(
+        env: Env,
+        token: Address,
+        cursor: Option<u32>,
+        limit: u32,
+    ) -> Result<types::SubscriptionsTokenPage, Error> {
+        queries::list_subscriptions_by_token(&env, token, cursor, limit)
     }
 
     // ── Reconciliation Queries ─────────────────────────────────────────────────

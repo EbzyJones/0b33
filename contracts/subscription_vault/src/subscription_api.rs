@@ -118,6 +118,7 @@
 //! | `get_cap_info` | [`crate::queries::get_cap_info`] |
 //! | `get_token_subscription_count` | [`crate::queries::get_token_subscription_count`] |
 //! | `get_subscriptions_by_token` | [`crate::queries::get_subscriptions_by_token`] |
+//! | `list_subscriptions_by_token` | [`crate::queries::list_subscriptions_by_token`] |
 //!
 //! ## Metadata
 //! | Entrypoint | Delegate |
@@ -156,6 +157,7 @@ pub use crate::nonce::get_nonce;
 pub use crate::queries::{
     estimate_topup_for_intervals, get_cap_info, get_next_charge_info, get_subscription,
     get_subscriptions_by_token, get_token_subscription_count, list_subscriptions_by_subscriber,
+    list_subscriptions_by_token,
     get_plan_max_active_subs,
 };
 pub use crate::subscription::{
