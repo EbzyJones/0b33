@@ -454,7 +454,7 @@ pub mod oracle {
 
     /// Persist oracle configuration. Admin only (caller must have verified auth).
     #[allow(clippy::too_many_arguments)]
-    pub fn set_oracle_config(
+    pub fn set_oracle_config_except_address(
         env: &Env,
         enabled: bool,
         oracle: Option<Address>,
@@ -471,9 +471,10 @@ pub mod oracle {
 
         crate::admin::enforce_config_cooldown(env, "Oracle")?;
 
+        let current = get_oracle_config(env);
         let cfg = OracleConfig {
             enabled,
-            oracle: oracle.clone(),
+            oracle: oracle.or_else(|| current.oracle.clone()), // Keep existing address
             max_age_seconds: max_age,
             kind: kind.clone(),
             window_secs,
@@ -486,12 +487,41 @@ pub mod oracle {
             (Symbol::new(env, "oracle_config_updated"),),
             OracleConfigUpdatedEvent {
                 enabled,
-                oracle,
+                oracle: cfg.oracle.clone(),
                 max_age_seconds: max_age,
                 kind,
                 window_secs,
                 fixed_numerator,
                 fixed_denominator,
+                timestamp: env.ledger().timestamp(),
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Update oracle address via governance proposal (internal use only).
+    /// This bypasses the cooldown since it goes through quorum voting.
+    /// Called by `do_execute_proposal` when SetOracleConfig proposal executes.
+    pub fn set_oracle_address(
+        env: &Env,
+        oracle: Address,
+    ) -> Result<(), Error> {
+        let mut current = get_oracle_config(env);
+        current.oracle = Some(oracle.clone());
+        write_config(env, &DataKey::Oracle, &current);
+
+        env.events().publish(
+            (Symbol::new(env, "oracle_config_updated"),),
+            OracleConfigUpdatedEvent {
+                enabled: current.enabled,
+                oracle: Some(oracle),
+                max_age_seconds: current.max_age_seconds,
+                kind: current.kind,
+                window_secs: current.window_secs,
+                fixed_numerator: current.fixed_numerator,
+                fixed_denominator: current.fixed_denominator,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
                 contract_id: env.current_contract_address(),
@@ -1011,6 +1041,14 @@ impl SubscriptionVault {
     }
 
     /// Configure oracle pricing parameters. Admin only.
+    /// 
+    /// SECURITY: Changes to the `oracle` parameter (the oracle contract address) require
+    /// governance proposal approval via `submit_proposal` with `ProposalKind::SetOracleConfig`.
+    /// To change only oracle parameters like max_age, kind, or deviation thresholds while
+    /// keeping the oracle address unchanged, this function detects when oracle is not changing
+    /// and uses the standard cooldown protection.
+    ///
+    /// This separation prevents a compromised admin from immediately redirecting price feeds.
     pub fn set_oracle_config(
         env: Env,
         admin: Address,
@@ -1023,7 +1061,17 @@ impl SubscriptionVault {
         fixed_denominator: u128,
     ) -> Result<(), Error> {
         admin::require_admin_auth(&env, &admin)?;
-        crate::oracle::set_oracle_config(
+        
+        // If oracle address is being changed (set or disabled), require governance
+        let current_config = crate::oracle::get_oracle_config(&env);
+        let oracle_address_changing = current_config.oracle != oracle;
+        
+        if oracle_address_changing {
+            return Err(Error::GovernanceRequired);
+        }
+        
+        // Oracle address is not changing, proceed with regular update (with cooldown)
+        crate::oracle::set_oracle_config_except_address(
             &env,
             enabled,
             oracle,

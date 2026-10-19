@@ -1199,6 +1199,10 @@ pub enum ProposalKind {
     RemoveAcceptedToken = 6,
     /// Set the dispute response window in seconds (`target3`).
     SetDisputeWindow = 7,
+    /// Set oracle address to `Proposal::target` (the oracle contract address).
+    /// This is a critical security operation requiring governance approval.
+    /// Cannot be executed via immediate admin action; must go through quorum voting.
+    SetOracleConfig = 8,
 }
 
 
@@ -1537,6 +1541,9 @@ pub enum Error {
     ProposalCooldownActive = 14006,
     /// The proposal predates the most recent admin rotation.
     ProposalInvalidated = 14007,
+    /// Governance approval (multi-sig proposal) required for this operation.
+    /// The operation cannot proceed via immediate admin action.
+    GovernanceRequired = 14008,
 
     // --- Cancellation Escrow (13000-13099) ---
     /// No cancellation escrow found for this subscription.
