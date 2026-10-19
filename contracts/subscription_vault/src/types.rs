@@ -1424,6 +1424,19 @@ pub enum Error {
     /// Too many subscriptions were created by this subscriber within the
     /// current rate window.
     SubscriberRateLimited = 6018,
+    /// The idempotency ring buffer is full of live (non-expired) entries.
+    ///
+    /// This occurs when `IDEM_HISTORY` unique keys have all been inserted
+    /// within the idempotency TTL window for a single subscription, leaving
+    /// no expired slot to reclaim.  Under normal billing cadences this cannot
+    /// happen: filling 64 slots within the 7-day TTL requires a charge every
+    /// ~2.6 hours.  If this error is returned, investigate whether the
+    /// subscription is being charged at an abnormally high frequency.
+    ///
+    /// The caller should wait for at least one existing entry to expire
+    /// (i.e., until the oldest recorded timestamp is more than
+    /// `IDEM_TTL_SECS` seconds ago) before retrying.
+    IdemBufferFull = 6019,
 
     // --- Merchant Config (7000-7099) ---
     /// Fee basis points exceed maximum allowed value.

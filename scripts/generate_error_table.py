@@ -137,6 +137,7 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "UsageCapExceeded":               ("Retry only after new billing period begins or cap is raised.", "UsageLimitsConfiguredEvent", False),
     "BurstLimitExceeded":             ("Retry after burst_min_interval_secs elapses.", "UsageLimitsConfiguredEvent", False),
     "SubscriberRateLimited":         ("Retry after the subscriber creation rate window resets; check get_subscriber_create_window.", "—", False),
+    "IdemBufferFull":                 ("All 64 idempotency slots are occupied by live (non-expired) entries. Wait until the oldest entry's TTL elapses (up to 7 days from its insertion timestamp) before retrying. Under normal billing cadences this error cannot occur; if seen, investigate abnormally high charge frequency on this subscription.", "—", False),
     # Merchant config
     "InvalidFeeBips":                 ("Fix fee_bips to be in range [0, 10000].", "MerchantConfigUpdatedEvent", False),
     "InvalidOperations":              ("Fix allowed_operations bitmap to use only valid OP_* bits.", "MerchantConfigUpdatedEvent", False),

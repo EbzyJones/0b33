@@ -1071,7 +1071,7 @@ pub fn do_grace_buyout(
             subscription_id,
             &k,
         );
-        crate::idempotency::push_key(env, subscription_id, &hashed, now);
+        crate::idempotency::push_key(env, subscription_id, &hashed, now)?;
     }
 
     Ok((charge_amount, premium))
@@ -2499,7 +2499,7 @@ pub fn do_charge_one_off(
             subscription_id,
             &k,
         );
-        crate::idempotency::push_key(env, subscription_id, &hashed, now);
+        crate::idempotency::push_key(env, subscription_id, &hashed, now)?;
     }
 
     Ok(())
