@@ -119,6 +119,7 @@ REMEDIATION: dict[str, tuple[str, str, bool]] = {
     "OracleNotConfigured":            ("Admin must call set_oracle_config with a valid oracle address.", "OracleConfigUpdatedEvent", False),
     "OraclePriceUnavailable":         ("Retry only after oracle data feed recovers.", "OracleChargeResolvedEvent", False),
     "OraclePriceStale":               ("Retry only after a fresh oracle quote is published.", "OracleChargeResolvedEvent", False),
+    "AccountingInvariantViolation":   ("Treat as a critical accounting failure: the vault's live token balance is below its accounted total. Pause writes and investigate reconciliation (get_token_reconciliation) before retrying. Emitted by invariants::assert_token_balance_invariant on the charge/withdraw paths; the transaction is reverted (fail-closed). Not user-retriable.", "—", False),
     "OracleDeviationTooHigh":         ("Treat as terminal; the oracle price deviated past the circuit-breaker threshold. Investigate the price feed before retrying.", "OracleChargeResolvedEvent", False),
     "ProtocolFeeTooHigh":            ("Fix protocol_fee_bps to be at most MAX_PROTOCOL_FEE_BIPS.", "ProtocolFeeUpdatedEvent", False),
     "SelfReferralNotAllowed":        ("Use a different inviter address; an account cannot refer itself.", "—", False),

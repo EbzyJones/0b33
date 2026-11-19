@@ -171,18 +171,24 @@ Partial refunds work against the **remaining prepaid balance**:
 - Multiple successive partial refunds are allowed as long as each individual
   `amount <= current prepaid_balance` at the time of the call.
 - A refund equal to the full remaining balance is valid ("full-balance-as-partial").
-- Partial refunds are permitted on subscriptions in **any status**, including
-  `Cancelled`. This supports the common pattern of cancelling first, then issuing
-  a prorated refund of the remaining balance before the subscriber withdraws.
+- Partial refunds operate on `prepaid_balance`. Cancellation zeroes
+  `prepaid_balance` and moves the remaining balance into the time-locked
+  cancellation escrow (see `cancellation.md`), so a `partial_refund` on a
+  `Cancelled` subscription fails with `InsufficientBalance`. Recovery after
+  cancellation is performed through the cancellation escrow, not `partial_refund`.
 
 ### Common flows
 
-#### Cancellation with prorated refund
+#### Cancellation (recovered via the cancellation escrow)
+
+Once `cancel_subscription` runs, `prepaid_balance` is zeroed and the remaining
+balance is held in escrow, so `partial_refund` no longer applies. Recovery is via
+the escrow:
 
 ```
 1. cancel_subscription(subscription_id, subscriber)
-2. partial_refund(admin, subscription_id, subscriber, prorated_amount)
-3. withdraw_subscriber_funds(subscription_id, subscriber)   // withdraw remainder
+2. // after CANCELLATION_ESCROW_WINDOW_SECS (24h) elapses:
+3. claim_cancellation_escrow(subscriber, subscription_id)
 ```
 
 #### Mid-period downgrade
@@ -217,5 +223,5 @@ Partial refunds work against the **remaining prepaid balance**:
 | Repeated refunds are cumulative | `test_partial_refund_repeated_debits_are_cumulative` |
 | Cumulative drain then over-refund fails | `test_partial_refund_cumulative_exact_drain_then_over_refund_fails` |
 | Full balance as partial | `test_partial_refund_full_balance_as_partial_succeeds` |
-| Refund after cancellation | `test_partial_refund_after_cancellation_succeeds` |
+| Refund after cancellation (escrowed) | `test_partial_refund_after_cancellation_rejected_balance_escrowed` |
 | Event emission | `test_partial_refund_emits_event` |

@@ -382,7 +382,7 @@ fn admin_and_operator_have_independent_nonce_sequences() {
 // ── Bulk cancel: happy paths & refunds ──────────────────────────────────────
 
 #[test]
-fn admin_bulk_cancel_cancels_and_refunds() {
+fn admin_bulk_cancel_cancels_and_holds_escrow() {
     let te = TestEnv::default();
     let subscriber = Address::generate(&te.env);
     let merchant = Address::generate(&te.env);
@@ -399,8 +399,11 @@ fn admin_bulk_cancel_cancels_and_refunds() {
     assert!(results.get(0).unwrap().changed && results.get(1).unwrap().changed);
     assert_eq!(status(&te, a), SubscriptionStatus::Cancelled);
     assert_eq!(status(&te, b), SubscriptionStatus::Cancelled);
-    // Full prepaid balance of both subscriptions refunded.
-    assert_eq!(token_balance(&te, &subscriber), DEPOSIT * 2);
+    // Cancellation holds each prepaid balance in a time-locked escrow (#604)
+    // instead of refunding immediately.
+    assert_eq!(token_balance(&te, &subscriber), 0);
+    assert_eq!(te.client.get_cancellation_escrow(&a).amount, DEPOSIT);
+    assert_eq!(te.client.get_cancellation_escrow(&b).amount, DEPOSIT);
 }
 
 #[test]
@@ -484,7 +487,7 @@ fn bulk_cancel_id_zero_reports_not_found() {
 }
 
 #[test]
-fn bulk_cancel_skips_already_cancelled_no_double_refund() {
+fn bulk_cancel_skips_already_cancelled_no_double_escrow() {
     let te = TestEnv::default();
     let subscriber = Address::generate(&te.env);
     let merchant = Address::generate(&te.env);
@@ -492,19 +495,19 @@ fn bulk_cancel_skips_already_cancelled_no_double_refund() {
     // `funded_sub` is net-zero on the subscriber's wallet (mint DEPOSIT, then
     // deposit DEPOSIT into the contract).
     let already = funded_sub(&te, &subscriber, &merchant);
-    // Cancel once via the merchant single-id path — refunds DEPOSIT already.
+    // Cancel once via the merchant single-id path — escrows DEPOSIT already.
     te.client.cancel_subscription(&already, &merchant);
-    assert_eq!(token_balance(&te, &subscriber), DEPOSIT);
+    assert_eq!(token_balance(&te, &subscriber), 0);
 
-    // Creating a second funded sub is net-zero, so the refund above is untouched.
+    // Creating a second funded sub is net-zero, so the escrow above is untouched.
     let active = funded_sub(&te, &subscriber, &merchant);
-    assert_eq!(token_balance(&te, &subscriber), DEPOSIT);
+    assert_eq!(token_balance(&te, &subscriber), 0);
 
     let results =
         te.client
             .bulk_cancel_subscriptions(&te.admin, &vec![&te.env, already, active], &0u64);
 
-    // already-cancelled -> skipped, no second refund
+    // already-cancelled -> skipped, no second escrow
     assert_eq!(
         results.get(0).unwrap(),
         BulkSubscriptionResult {
@@ -515,12 +518,15 @@ fn bulk_cancel_skips_already_cancelled_no_double_refund() {
         }
     );
     assert!(results.get(1).unwrap().changed);
-    // Only `active`'s DEPOSIT is refunded here, on top of the earlier refund.
-    assert_eq!(token_balance(&te, &subscriber), DEPOSIT * 2);
+    // Funds are held in escrow, not refunded to the wallet.
+    assert_eq!(token_balance(&te, &subscriber), 0);
+    // `already` was escrowed exactly once; `active` is escrowed here.
+    assert_eq!(te.client.get_cancellation_escrow(&already).amount, DEPOSIT);
+    assert_eq!(te.client.get_cancellation_escrow(&active).amount, DEPOSIT);
 }
 
 #[test]
-fn bulk_cancel_duplicate_ids_refunds_once() {
+fn bulk_cancel_duplicate_ids_escrows_once() {
     let te = TestEnv::default();
     let subscriber = Address::generate(&te.env);
     let merchant = Address::generate(&te.env);
@@ -533,8 +539,9 @@ fn bulk_cancel_duplicate_ids_refunds_once() {
 
     assert!(results.get(0).unwrap().changed);
     assert!(!results.get(1).unwrap().changed && results.get(1).unwrap().success);
-    // Refund happened exactly once.
-    assert_eq!(token_balance(&te, &subscriber), DEPOSIT);
+    // Escrowed exactly once (not doubled) and nothing refunded to the wallet.
+    assert_eq!(token_balance(&te, &subscriber), 0);
+    assert_eq!(te.client.get_cancellation_escrow(&a).amount, DEPOSIT);
 }
 
 #[test]
@@ -691,7 +698,7 @@ fn bulk_pause_partial_failures_documented() {
 /// Verify that bulk_cancel processes all IDs with partial failures and does
 /// not roll back earlier successful cancellations.
 #[test]
-fn bulk_cancel_partial_failures_refunds_successful_only() {
+fn bulk_cancel_partial_failures_escrows_successful_only() {
     let te = TestEnv::default();
     let subscriber = Address::generate(&te.env);
     let merchant = Address::generate(&te.env);
@@ -712,7 +719,7 @@ fn bulk_cancel_partial_failures_refunds_successful_only() {
 
     assert_eq!(results.len(), 3);
 
-    // sub_a: cancelled and refunded
+    // sub_a: cancelled and escrowed
     assert!(results.get(0).unwrap().success && results.get(0).unwrap().changed);
     assert_eq!(status(&te, sub_a), SubscriptionStatus::Cancelled);
 
@@ -723,16 +730,19 @@ fn bulk_cancel_partial_failures_refunds_successful_only() {
         Error::NotFound.to_code()
     );
 
-    // sub_b: cancelled and refunded
+    // sub_b: cancelled and escrowed
     assert!(results.get(2).unwrap().success && results.get(2).unwrap().changed);
     assert_eq!(status(&te, sub_b), SubscriptionStatus::Cancelled);
 
-    // Both successful cancellations were refunded despite the missing ID failure
+    // Both successful cancellations were escrowed despite the missing ID
+    // failure, and nothing was refunded straight to the wallet (#604).
     assert_eq!(
         token_balance(&te, &subscriber),
-        DEPOSIT * 2,
-        "successful cancellations must refund even when other IDs fail"
+        0,
+        "successful cancellations escrow funds even when other IDs fail"
     );
+    assert_eq!(te.client.get_cancellation_escrow(&sub_a).amount, DEPOSIT);
+    assert_eq!(te.client.get_cancellation_escrow(&sub_b).amount, DEPOSIT);
 }
 
 /// Verify that if a failure occurs in the middle of a batch, later IDs are
@@ -915,7 +925,7 @@ mod token_removal_migration {
     // ── AC2: cancel_subscriptions_for_token migrates balances ────────────────
 
     #[test]
-    fn cancel_subscriptions_for_token_refunds_prepaid_balances() {
+    fn cancel_subscriptions_for_token_escrows_prepaid_balances() {
         let te = TestEnv::default();
         let token2 = register_second_token(&te);
         let subscriber = Address::generate(&te.env);
@@ -937,8 +947,10 @@ mod token_removal_migration {
             te.client.get_subscription(&sub_id).status,
             SubscriptionStatus::Cancelled
         );
-        // Full prepaid balance returned to the subscriber.
-        assert_eq!(token_balance(&te, &token2, &subscriber), DEPOSIT);
+        // The prepaid balance is held in a time-locked escrow (#604), not
+        // refunded straight to the wallet.
+        assert_eq!(token_balance(&te, &token2, &subscriber), 0);
+        assert_eq!(te.client.get_cancellation_escrow(&sub_id).amount, DEPOSIT);
     }
 
     #[test]

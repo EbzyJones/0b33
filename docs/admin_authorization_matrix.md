@@ -80,7 +80,7 @@ needing the full admin key.
 | Entrypoint | Authorization model | Unauthorized caller | Nonce | Notes |
 | --- | --- | --- | --- | --- |
 | `bulk_pause_subscriptions` | `caller` must equal stored admin **or** operator | `Unauthorized` | Domain 2 (`DOMAIN_OPERATOR_BATCH_CHARGE`), keyed per caller | Partial-failure tolerant; skips already-paused/missing/expired ids; **not** emergency-stop gated (mirrors `pause_subscription`); rejects > `BATCH_MAX_SIZE` ids with `BatchTooLarge`; empty list is a no-op (no nonce, no event) |
-| `bulk_cancel_subscriptions` | `caller` must equal stored admin **or** operator | `Unauthorized` | Domain 2 (`DOMAIN_OPERATOR_BATCH_CHARGE`), keyed per caller | As above, plus refunds each cancelled subscription's prepaid balance; wrapped in a reentrancy guard because the loop performs token transfers; duplicate/already-cancelled ids are skipped so no double refund |
+| `bulk_cancel_subscriptions` | `caller` must equal stored admin **or** operator | `Unauthorized` | Domain 2 (`DOMAIN_OPERATOR_BATCH_CHARGE`), keyed per caller | As above, plus moves each cancelled subscription's remaining prepaid balance into the time-locked cancellation escrow (no token transfer — the funds stay in the vault); wrapped in a reentrancy guard; duplicate/already-cancelled ids are skipped (idempotent) so no double escrow |
 
 Each call returns a `Vec<BulkSubscriptionResult>` — one entry per requested id, in
 request order — and emits one `BulkPauseEvent`/`BulkCancelEvent` envelope plus the

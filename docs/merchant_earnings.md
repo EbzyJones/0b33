@@ -153,10 +153,11 @@ processed. If all tokens have zero balance, `flush_payouts` returns 0 and no
    recoverable stranded balance.
 6. **Reconciliation**: `MerchantBalance = total_accruals − total_withdrawals − total_refunds`.
    This must always be true and is verified by `get_reconciliation_snapshot`.
-7. **Property-test invariant**: random sequences of charges, withdrawals, and cancellations
-   are exercised by `prop_merchant_earnings_sum_equals_total_accounted` so that the sum of
-   all merchant-bucket balances for a token remains equal to `TotalAccounted[(token)]` after
-   every mutation.
+7. **Property-test invariant**: random sequences of deposits, charges, withdrawals, and
+   cancellations are exercised by `prop_accounted_equals_prepaid_plus_merchant_liabilities`
+   so that, for every token, `TotalAccounted[(token)]` remains equal to the sum of all
+   subscriber prepaid balances plus all merchant-bucket balances. A charge only moves value
+   between those two buckets and therefore leaves the anchor unchanged.
 
 ## Storage Layout
 
@@ -379,7 +380,7 @@ rejected withdrawal is a total no-op.
 - **Pending refund**: reverse a pending charge → `pending` decreases, `settled` unchanged.
 - **Reconciliation**: property test that `pending + settled` equals the existing
   `computed_balance` after arbitrary charge/settle/withdraw/refund sequences (extends
-  `prop_merchant_earnings_sum_equals_total_accounted`).
+  `prop_accounted_equals_prepaid_plus_merchant_liabilities`).
 - **Migration**: a v_old balance migrates into `settled` and is immediately withdrawable.
 - **Failure atomicity**: a rejected withdrawal (pending-only funds) leaves `pending`,
   `settled`, `withdrawals`, and `TotalAccounted` byte-for-byte unchanged.

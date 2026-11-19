@@ -26,6 +26,7 @@ The enforcement classifications used below are:
 | INV-5 — Reentrancy: State Is Committed Before External Token Transfers | **On-chain** | Contract execution applies storage effects before `token.transfer()` under the documented Soroban execution model. |
 | INV-6 — Subscription Lifecycle: Cancelled Is a Terminal State | **On-chain** | `validate_status_transition` rejects transitions out of `Cancelled` before mutation. |
 | INV-7 — Authorization: Only the Admin May Execute Privileged Operations | **On-chain** | Privileged entrypoints use the stored admin address and Soroban authorization checks. |
+| INV-8 — Custody Solvency: Token Balance Covers Accounted Funds | **On-chain** | `invariants::assert_token_balance_invariant` runs unconditionally on every merchant credit and withdrawal path and rejects `balance < TotalAccounted` with `AccountingInvariantViolation` (5009). |
 
 No invariant currently documented in this file is classified as **Off-chain**, **Mixed**, or
 **Unverified**. The assumptions and limitations below describe conditions that may require
@@ -248,6 +249,52 @@ immediately invalidated.
   multi-signature rotation and time-locked upgrades.
 - `batch_charge` does not accept an explicit admin argument; authentication is against the
   stored admin at the Soroban host auth layer.
+
+---
+
+## INV-8 — Custody Solvency: Token Balance Covers Accounted Funds
+
+**Property:** At all times, for every accepted token, the vault's live on-chain token balance
+is greater than or equal to the total it has accounted for (`TotalAccounted(token)`):
+
+```text
+token.balance(contract) >= TotalAccounted(token)
+```
+
+`TotalAccounted(token)` is the running total of every unit the vault holds in custody: it rises
+on subscriber deposits and falls whenever funds leave the vault (merchant withdrawals, merchant
+refunds, subscriber withdrawals, dispute payouts). A charge moves value between internal buckets
+(subscriber `prepaid_balance` → merchant liability) and therefore leaves it unchanged. Any
+balance held *above* the anchor is unaccounted surplus (for example tokens minted straight to
+the contract) and stays admin-recoverable, so the balance may legitimately exceed the anchor —
+but it must never fall below it. A shortfall means the vault no longer holds enough tokens to
+cover the balances it claims to owe: a silent accounting discrepancy.
+
+**Enforcement module:** `contracts/subscription_vault/src/invariants.rs` —
+`assert_token_balance_invariant`. The guard runs **unconditionally** (no feature flag, no
+`#[cfg(test)]`) on every merchant credit and withdrawal path in `merchant.rs`
+(`credit_merchant_balance_for_token`, `withdraw_merchant_funds_for_token`, `merchant_refund`,
+`flush_merchant_token`, and the sub-account withdrawal path). Callers propagate the error with
+`?`, so a violation returns `Error::AccountingInvariantViolation` (5009) and reverts the
+surrounding transaction (fail-closed) rather than letting drift accumulate.
+
+**Tests:**
+
+| Test | File | What it proves |
+|------|------|----------------|
+| `total_accounted_tracks_net_flow_into_and_out_of_the_vault` | `test_withdraw_charge_chaos.rs` | Anchor equals deposits minus funds withdrawn across charge/withdraw traces |
+| `prop_accounted_equals_prepaid_plus_merchant_liabilities` | `test_charge_invariants.rs` | Anchor equals Σ prepaid + Σ merchant balance across random deposit/charge/withdraw/refund sequences |
+| `test_recovery_exact_surplus_leaves_accounted_funds_intact` | `test_recovery.rs` | Surplus above the anchor is recoverable; accounted funds stay intact |
+| `get_total_accounted_rejects_unregistered_token` | `test_recovery.rs` | Anchor reads are scoped to accepted tokens |
+
+**Assumptions / Limitations:**
+- The check is O(1): one instance-storage read of the anchor plus one token `balance` read.
+- The stronger identity `balance == TotalAccounted + recoverable` is *not* asserted on-chain —
+  it requires summing per-merchant and per-subscription balances, for which no single index
+  exists. It remains available off-chain via `get_token_reconciliation`.
+- Before issue #603 the check compiled only under `#[cfg(test)]` / `feature = "invariants"` (a
+  feature that was never declared in `Cargo.toml`) and `accounting` was a no-op stub, so
+  production ran with `TotalAccounted` pinned at 0 and no continuous verification.
 
 ---
 

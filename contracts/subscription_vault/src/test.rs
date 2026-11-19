@@ -1,7 +1,7 @@
 use crate::{
     can_transition, compute_next_charge_info, get_allowed_transitions,
     validate_status_transition,
-    ChargeExecutionResult, DISPUTE_WINDOW_SECS, DataKey, Dispute, DisputeOpenedEvent,
+    ChargeExecutionResult, CANCELLATION_ESCROW_WINDOW_SECS, DISPUTE_WINDOW_SECS, DataKey, Dispute, DisputeOpenedEvent,
     DisputeRespondedEvent, DisputeResolvedEvent, DisputeStatus, Error, MerchantWithdrawalEvent,
     OraclePrice, RecoveryReason, Subscription, SubscriptionStatus, SubscriptionVault,
     SubscriptionVaultClient, MAX_SUBSCRIPTION_AMOUNT, MAX_SUBSCRIPTION_ID,
@@ -1246,6 +1246,9 @@ fn test_withdraw_subscriber_funds() {
     );
     test_env.client.deposit_funds(&sub_id, &5_000_000, &None::<soroban_sdk::BytesN<32>>);
     test_env.client.cancel_subscription(&sub_id, &subscriber);
+    // Cancel moves the prepaid balance into a time-locked cancellation escrow
+    // (#604); advance past the escrow window before withdrawing.
+    test_env.jump(CANCELLATION_ESCROW_WINDOW_SECS + 1);
     test_env.client.withdraw_subscriber_funds(&sub_id, &subscriber);
 
     let sub = test_env.client.get_subscription(&sub_id);
@@ -3506,9 +3509,11 @@ fn test_partial_refund_full_balance_as_partial_succeeds() {
     assert_eq!(test_env.token_client().balance(&subscriber), 20_000_000i128);
 }
 
-/// Partial refund is allowed on a cancelled subscription (remaining balance can be returned).
+/// Partial refund cannot draw from a cancelled subscription: cancellation moves
+/// the prepaid balance into the time-locked cancellation escrow (#604), leaving
+/// a zero prepaid balance for the refund to draw on.
 #[test]
-fn test_partial_refund_after_cancellation_succeeds() {
+fn test_partial_refund_after_cancellation_rejected_balance_escrowed() {
     let test_env = TestEnv::default();
     let subscriber = Address::generate(&test_env.env);
     let merchant = Address::generate(&test_env.env);
@@ -3528,13 +3533,19 @@ fn test_partial_refund_after_cancellation_succeeds() {
         .client.deposit_funds(&sub_id, &15_000_000i128, &None::<soroban_sdk::BytesN<32>>);
     test_env.client.cancel_subscription(&sub_id, &subscriber);
 
-    // Admin can still issue a partial refund on a cancelled subscription.
-    test_env
-        .client
-        .partial_refund(&test_env.admin, &sub_id, &subscriber, &5_000_000i128);
+    // The full balance is now held in the cancellation escrow; prepaid is zeroed.
+    assertions::assert_prepaid_balance(&test_env.client, &sub_id, 0);
+    assert_eq!(
+        test_env.client.get_cancellation_escrow(&sub_id).amount,
+        15_000_000i128
+    );
 
-    assertions::assert_prepaid_balance(&test_env.client, &sub_id, 10_000_000i128);
-    assert_eq!(test_env.token_client().balance(&subscriber), 5_000_000i128);
+    // A partial refund can no longer draw from the (zeroed) prepaid balance.
+    let result = test_env
+        .client
+        .try_partial_refund(&test_env.admin, &sub_id, &subscriber, &5_000_000i128);
+    assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+    assert_eq!(test_env.token_client().balance(&subscriber), 0);
 }
 
 /// Partial refund emits a PartialRefundEvent with correct fields.
@@ -3765,6 +3776,9 @@ fn test_withdraw_subscriber_funds_exactly_once() {
 
     test_env.client.deposit_funds(&id, &5_000_000, &None::<soroban_sdk::BytesN<32>>);
     test_env.client.cancel_subscription(&id, &subscriber);
+    // Cancel escrows the prepaid balance (#604); advance past the window so the
+    // withdrawal releases it.
+    test_env.jump(CANCELLATION_ESCROW_WINDOW_SECS + 1);
 
     // First withdrawal: Success
     test_env.client.withdraw_subscriber_funds(&id, &subscriber);
@@ -3825,6 +3839,8 @@ fn test_cancel_and_withdraw_events() {
     let events = test_env.env.events().all();
     let _cancel_event = events.get(events.len() - 1).unwrap();
 
+    // Cancel escrows the balance (#604); advance past the window before withdraw.
+    test_env.jump(CANCELLATION_ESCROW_WINDOW_SECS + 1);
     test_env.client.withdraw_subscriber_funds(&id, &subscriber);
 
     // Check withdrawal event
@@ -4391,6 +4407,8 @@ fn test_billing_lifecycle_golden_path_end_to_end() {
     test_env.client.cancel_subscription(&id, &subscriber);
     assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Cancelled);
 
+    // Cancel escrows the remaining balance (#604); advance past the window.
+    test_env.jump(CANCELLATION_ESCROW_WINDOW_SECS + 1);
     test_env.client.withdraw_subscriber_funds(&id, &subscriber);
     let closed_out = test_env.client.get_subscription(&id);
     assert_eq!(closed_out.prepaid_balance, 0);
@@ -4913,6 +4931,8 @@ fn test_withdraw_subscriber_funds_after_cancel() {
     test_env.client.deposit_funds(&id, &5_000_000, &None::<soroban_sdk::BytesN<32>>);
     test_env.client.cancel_subscription(&id, &subscriber);
 
+    // Cancel escrows the balance (#604); advance past the window before withdraw.
+    test_env.jump(CANCELLATION_ESCROW_WINDOW_SECS + 1);
     test_env.client.withdraw_subscriber_funds(&id, &subscriber);
 
     let sub = test_env.client.get_subscription(&id);
@@ -7403,9 +7423,16 @@ fn test_idempotent_cancel_preserves_all_fields() {
 
     let after = test_env.client.get_subscription(&id);
 
+    // The prepaid balance is moved into the time-locked cancellation escrow on
+    // the first cancel (#604); the idempotent second cancel must not double it.
     assert_eq!(
-        after.prepaid_balance, before.prepaid_balance,
-        "balance must not change on cancel"
+        after.prepaid_balance, 0,
+        "prepaid balance is zeroed on cancel"
+    );
+    assert_eq!(
+        test_env.client.get_cancellation_escrow(&id).amount,
+        before.prepaid_balance,
+        "escrow must hold the prepaid balance exactly once"
     );
     assert_eq!(
         after.last_payment_timestamp, before.last_payment_timestamp,
@@ -7581,7 +7608,7 @@ fn test_balance_preserved_across_pause_resume() {
     assertions::assert_prepaid_balance(&test_env.client, &id, original_balance);
 }
 
-// prepaid_balance must be retained (not zeroed) after cancel.
+// prepaid_balance must be moved into the time-locked cancellation escrow on cancel.
 #[test]
 fn test_balance_preserved_on_cancel() {
     let test_env = TestEnv::default();
@@ -7593,7 +7620,14 @@ fn test_balance_preserved_on_cancel() {
     let original_balance = test_env.client.get_subscription(&id).prepaid_balance;
 
     test_env.client.cancel_subscription(&id, &subscriber);
-    assertions::assert_prepaid_balance(&test_env.client, &id, original_balance);
+    // The funds are no longer in `prepaid_balance` — they are preserved in the
+    // time-locked cancellation escrow (#604), not burned, so the subscriber can
+    // still recover them after the window.
+    assertions::assert_prepaid_balance(&test_env.client, &id, 0);
+    assert_eq!(
+        test_env.client.get_cancellation_escrow(&id).amount,
+        original_balance
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -7644,7 +7678,9 @@ fn test_charge_blocked_after_cancel() {
         Err(Ok(Error::NotActive)),
         "cancelled charge must return NotActive"
     );
-    assertions::assert_prepaid_balance(&test_env.client, &id, PREPAID);
+    // The prepaid balance was zeroed into the escrow on cancel; the rejected
+    // charge must not have touched it.
+    assertions::assert_prepaid_balance(&test_env.client, &id, 0);
 }
 
 // Resume then immediately charge must succeed when the interval has elapsed
@@ -7820,7 +7856,13 @@ fn test_batch_charge_with_paused_and_cancelled() {
     // Only the active subscription's balance was deducted.
     assertions::assert_prepaid_balance(&test_env.client, &id_active, PREPAID - AMOUNT);
     assertions::assert_prepaid_balance(&test_env.client, &id_paused, PREPAID);
-    assertions::assert_prepaid_balance(&test_env.client, &id_cancelled, PREPAID);
+    // Cancellation moved id_cancelled's balance into the escrow (#604); the
+    // rejected charge must not have touched it.
+    assertions::assert_prepaid_balance(&test_env.client, &id_cancelled, 0);
+    assert_eq!(
+        test_env.client.get_cancellation_escrow(&id_cancelled).amount,
+        PREPAID
+    );
 }
 
 // -----------------------------------------------------------------------------
@@ -7843,12 +7885,17 @@ fn test_pause_cancel_withdraw_flow() {
     assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Paused);
     assertions::assert_prepaid_balance(&test_env.client, &id, original_balance);
 
-    // Cancel — balance still retained for withdrawal.
+    // Cancel — balance moves into the time-locked cancellation escrow (#604).
     test_env.client.cancel_subscription(&id, &subscriber);
     assertions::assert_status(&test_env.client, &id, SubscriptionStatus::Cancelled);
-    assertions::assert_prepaid_balance(&test_env.client, &id, original_balance);
+    assertions::assert_prepaid_balance(&test_env.client, &id, 0);
+    assert_eq!(
+        test_env.client.get_cancellation_escrow(&id).amount,
+        original_balance
+    );
 
-    // Withdraw — balance zeroed, tokens returned to subscriber.
+    // Withdraw after the escrow window — balance released to the subscriber.
+    test_env.jump(CANCELLATION_ESCROW_WINDOW_SECS + 1);
     test_env.client.withdraw_subscriber_funds(&id, &subscriber);
     assertions::assert_prepaid_balance(&test_env.client, &id, 0);
 
