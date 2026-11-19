@@ -883,6 +883,20 @@ impl InsufficientBalanceError {
 /// be resolved in favour of the subscriber.
 pub const DISPUTE_WINDOW_SECS: u64 = 14 * 24 * 60 * 60; // 14 days
 
+/// Minimum permitted dispute window (24 hours).
+///
+/// A window shorter than this would let disputes auto-resolve before a
+/// merchant has any practical chance to respond, eliminating subscriber
+/// recourse on-chain.
+pub const MIN_DISPUTE_WINDOW_SECS: u64 = 24 * 60 * 60; // 24 hours
+
+/// Maximum permitted dispute window (90 days).
+///
+/// A window longer than this would trap merchant funds in disputed escrow
+/// for an unreasonable length of time, effectively freezing them forever if
+/// set to a pathological value such as `u64::MAX`.
+pub const MAX_DISPUTE_WINDOW_SECS: u64 = 90 * 24 * 60 * 60; // 90 days
+
 /// Hold window (in seconds) applied to a cancellation refund before the
 /// subscriber can claim it.
 ///
@@ -3578,6 +3592,9 @@ pub struct MerchantConfigInitializedEvent {
 #[derive(Clone, Debug)]
 pub struct MerchantConfigUpdatedEvent {
     pub merchant: Address,
+    pub old_payout_address: Address,
+    pub old_fee_bips: i32,
+    pub old_allowed_operations: i32,
     pub payout_address: Address,
     pub fee_bips: i32,
     pub allowed_operations: i32,

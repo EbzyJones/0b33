@@ -116,7 +116,7 @@ fn dispute_window_can_be_changed_by_governance_proposal() {
 		&ProposalKind::SetDisputeWindow,
 		&admin,
 		&None::<Address>,
-		&3_600u32,
+		&(7 * 24 * 60 * 60u32), // 7 days — within [MIN_DISPUTE_WINDOW_SECS, MAX_DISPUTE_WINDOW_SECS]
 		&6_700u32,
 		&eta,
 	);
@@ -125,7 +125,7 @@ fn dispute_window_can_be_changed_by_governance_proposal() {
 	env.ledger().set_timestamp(eta);
 	client.execute_proposal(&proposal_id);
 
-	assert_eq!(client.get_dispute_window_secs(), 3_600);
+	assert_eq!(client.get_dispute_window_secs(), 7 * 24 * 60 * 60);
 }
 
 // ── Pre-validation tests: reject invalid configs at submission time ──────────
@@ -283,12 +283,12 @@ fn set_dispute_window_proposal_accepts_valid_config() {
 
 	let eta = env.ledger().timestamp() + 3 * 24 * 60 * 60;
 
-	// Valid: window_secs > 0 and < u32::MAX
+	// Valid: window_secs within [MIN_DISPUTE_WINDOW_SECS, MAX_DISPUTE_WINDOW_SECS] (7 days)
 	let result = client.try_submit_proposal(
 		&ProposalKind::SetDisputeWindow,
 		&admin,
 		&None::<Address>,
-		&3_600u32,
+		&(7 * 24 * 60 * 60u32),
 		&5_000u32,
 		&eta,
 	);
@@ -296,6 +296,60 @@ fn set_dispute_window_proposal_accepts_valid_config() {
 	assert!(result.is_ok());
 	let proposal_id = result.unwrap().unwrap();
 	assert!(proposal_id > 0);
+}
+
+#[test]
+fn set_dispute_window_proposal_rejects_below_minimum() {
+	let env = Env::default();
+	env.mock_all_auths();
+	let contract_id = env.register(SubscriptionVault, ());
+	let client = SubscriptionVaultClient::new(&env, &contract_id);
+	let admin = Address::generate(&env);
+	let token = env
+		.register_stellar_asset_contract_v2(admin.clone())
+		.address();
+	client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+
+	let eta = env.ledger().timestamp() + 3 * 24 * 60 * 60;
+
+	// 23 hours — one hour below the 24-hour minimum
+	let result = client.try_submit_proposal(
+		&ProposalKind::SetDisputeWindow,
+		&admin,
+		&None::<Address>,
+		&(23 * 60 * 60u32),
+		&5_000u32,
+		&eta,
+	);
+
+	assert_eq!(result, Err(Ok(Error::InvalidInput)));
+}
+
+#[test]
+fn set_dispute_window_proposal_rejects_above_maximum() {
+	let env = Env::default();
+	env.mock_all_auths();
+	let contract_id = env.register(SubscriptionVault, ());
+	let client = SubscriptionVaultClient::new(&env, &contract_id);
+	let admin = Address::generate(&env);
+	let token = env
+		.register_stellar_asset_contract_v2(admin.clone())
+		.address();
+	client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+
+	let eta = env.ledger().timestamp() + 3 * 24 * 60 * 60;
+
+	// 91 days — one day above the 90-day maximum
+	let result = client.try_submit_proposal(
+		&ProposalKind::SetDisputeWindow,
+		&admin,
+		&None::<Address>,
+		&(91 * 24 * 60 * 60u32),
+		&5_000u32,
+		&eta,
+	);
+
+	assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
 
 #[test]
