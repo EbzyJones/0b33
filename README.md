@@ -329,3 +329,6 @@ See the [LICENSE](LICENSE) file in this repository (add one if not present). Con
 
 <!-- handsoff-issue-531 -->
 - #531: [#395] EmergencyWithdrawIntent can be re-requested while previous intent is pending — cooldown reset exploit
+
+<!-- handsoff-issue-532 -->
+- #532: [#396] set_protocol_fee proposal does not validate the new fee value before creating the proposal
