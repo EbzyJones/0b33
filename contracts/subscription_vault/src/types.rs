@@ -3697,29 +3697,97 @@ pub struct PrepaidQueryResult {
     pub has_more: bool,
 }
 
-/// Event emitted when a token is removed from the accepted-token registry.
+// ── Decimal normalisation helpers ─────────────────────────────────────────────
+//
+// Amounts inside the vault are stored in a canonical **9-decimal** internal
+// representation so arithmetic across tokens with different precisions stays
+// uniform.  These two functions convert between that internal form and the
+// token's native decimal count, which is registered under
+// `DataKey::TokenDecimals(token)` when the token is first accepted.
+//
+// # Invariants
+// - `denormalize_amount(normalize_amount(x)) == x` for all representable x.
+// - Both functions return `Err(Error::InvalidToken)` when no decimal entry is
+//   found (the token has never been accepted).
+// - Both return `Err(Error::InvalidTokenDecimals)` for a stored decimal count
+//   of 0, which is never valid for a Soroban-compatible fungible token.
+// - `normalize_amount` returns `Err(Error::InvalidInput)` when `decimals > 9`
+//   and `amount` has sub-9-decimal precision that cannot be represented exactly.
+// - Overflow on multiplication is returned as `Err(Error::Overflow)`.
+
+/// Internal decimal count used for all stored amounts.
+pub const INTERNAL_DECIMALS: u32 = 9;
+
+/// Convert a **native-decimal** `amount` to the internal 9-decimal representation.
 ///
-/// Emitted by `remove_accepted_token` after the registry is mutated.
-/// Indexers should use `remaining_subscription_count` to determine whether
-/// any subscriptions denominated in this token still exist. Because the
-/// existing live-subscription guard prevents removal while `Active` or
-/// `GracePeriod` subscriptions reference the token, all remaining
-/// subscriptions at removal time are in a terminal or quiescent state
-/// (`Cancelled`, `Paused`, `InsufficientBalance`, `Expired`, `Archived`).
-/// Subscribers may still self-service cancel via `cancel_subscription`, or
-/// the admin may use `cancel_subscriptions_for_token` to drain them in bulk.
-#[contracttype]
-#[derive(Clone, Debug)]
-pub struct TokenRemovedEvent {
-    pub token: Address,
-    /// Number of subscription IDs still indexed under this token at removal time.
-    /// These subscriptions are non-chargeable but their prepaid balances can still
-    /// be recovered via cancellation.
-    pub remaining_subscription_count: u32,
-    pub admin: Address,
-    pub timestamp: u64,
-    pub schema_version: u32,
-    pub contract_id: Address,
+/// - For tokens with `decimals < 9`: multiplies by `10^(9 - decimals)`.
+/// - For tokens with `decimals > 9`: divides by `10^(decimals - 9)`; rejects
+///   amounts that would lose sub-9-decimal precision.
+/// - For `decimals == 9`: identity.
+pub fn normalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+
+    if decimals == INTERNAL_DECIMALS {
+        return Ok(amount);
+    }
+
+    if decimals < INTERNAL_DECIMALS {
+        let shift = INTERNAL_DECIMALS - decimals;
+        let factor = 10i128.pow(shift);
+        amount.checked_mul(factor).ok_or(Error::Overflow)
+    } else {
+        let shift = decimals - INTERNAL_DECIMALS;
+        let factor = 10i128.pow(shift);
+        // Reject if there is sub-9-decimal precision that cannot round-trip.
+        if amount % factor != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(amount / factor)
+    }
+}
+
+/// Convert an **internal 9-decimal** `amount` back to the token's native decimals.
+///
+/// - For tokens with `decimals < 9`: divides by `10^(9 - decimals)`; rejects
+///   amounts that would lose precision.
+/// - For tokens with `decimals > 9`: multiplies by `10^(decimals - 9)`.
+/// - For `decimals == 9`: identity.
+pub fn denormalize_amount(env: &Env, token: &Address, amount: i128) -> Result<i128, Error> {
+    let decimals: u32 = env
+        .storage()
+        .instance()
+        .get(&DataKey::TokenDecimals(token.clone()))
+        .ok_or(Error::InvalidToken)?;
+
+    if decimals == 0 {
+        return Err(Error::InvalidTokenDecimals);
+    }
+
+    if decimals == INTERNAL_DECIMALS {
+        return Ok(amount);
+    }
+
+    if decimals < INTERNAL_DECIMALS {
+        let shift = INTERNAL_DECIMALS - decimals;
+        let factor = 10i128.pow(shift);
+        // Reject if the internal amount has sub-native-decimal precision.
+        if amount % factor != 0 {
+            return Err(Error::InvalidInput);
+        }
+        Ok(amount / factor)
+    } else {
+        let shift = decimals - INTERNAL_DECIMALS;
+        let factor = 10i128.pow(shift);
+        amount.checked_mul(factor).ok_or(Error::Overflow)
+    }
 }
 
 #[cfg(test)]

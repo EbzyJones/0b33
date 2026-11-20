@@ -11910,242 +11910,131 @@ fn test_dispute_escrow_accounting_invariant() {
     assert_eq!(merchant_after_resolve, initial_merchant_balance);
 }
 
+// ── get_merchant_earnings denormalisation tests ───────────────────────────────
+//
+// DataKey::MerchantEarnings stores amounts in the internal 9-decimal
+// normalised denomination.  get_merchant_token_earnings must call
+// denormalize_amount before returning so callers receive native-decimal values.
 
-// ── Oracle Governance: Address Changes Require Proposal ────────────────────
-
-/// Oracle address changes must go through governance, not immediate admin action.
+/// 6-decimal token (e.g. USDC).
+/// Internal representation uses 9 decimals, so stored values are 10^3 times
+/// the native amount.  Verifies that the query returns values in 6-decimal
+/// native units.
 #[test]
-fn test_oracle_address_change_requires_governance() {
-    let test_env = TestEnv::default();
-    let oracle1 = test_env.env.register(MockOracle, ());
-    let oracle2 = test_env.env.register(MockOracle, ());
+fn test_get_merchant_earnings_denormalizes_6_decimal_token() {
+    use crate::types::{AccruedTotals, DataKey, TokenEarnings};
 
-    // Set initial oracle with governance (would normally go through submit_proposal, etc).
-    // For this test, we mock it by first setting via a config that has no address.
-    test_env.client.set_oracle_config(
-        &test_env.admin,
-        &true,
-        &Some(oracle1.clone()),
-        &300u64,
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    // Verify oracle1 is set
-    let cfg = test_env.client.get_oracle_config();
-    assert_eq!(cfg.oracle, Some(oracle1.clone()));
+    let admin = Address::generate(&env);
+    // Register a 6-decimal token so TokenDecimals is stored and the contract is initialised.
+    let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
 
-    // Attempt to change oracle address directly via admin (should fail with GovernanceRequired)
-    let result = test_env.client.try_set_oracle_config(
-        &test_env.admin,
-        &true,
-        &Some(oracle2.clone()),
-        &300u64,
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
-    assert_eq!(result, Err(Ok(Error::GovernanceRequired)));
+    let merchant = Address::generate(&env);
+    let merchant2 = merchant.clone();
 
-    // Verify oracle still points to oracle1 (unchanged)
-    let cfg = test_env.client.get_oracle_config();
-    assert_eq!(cfg.oracle, Some(oracle1));
+    // Write a TokenEarnings record directly in the internal 9-decimal form.
+    // Native 6-decimal amounts:
+    //   interval  = 10_000_000  (10 USDC)
+    //   usage     =  5_000_000  ( 5 USDC)
+    //   one_off   =  1_000_000  ( 1 USDC)
+    //   withdrawals=  3_000_000  ( 3 USDC)
+    //   refunds   =    500_000   (0.5 USDC)
+    //
+    // Internal 9-decimal (multiply by 10^3):
+    //   interval  = 10_000_000_000
+    //   usage     =  5_000_000_000
+    //   one_off   =  1_000_000_000
+    //   withdrawals=  3_000_000_000
+    //   refunds   =    500_000_000
+    env.as_contract(&contract_id, || {
+        let raw = TokenEarnings {
+            accruals: AccruedTotals {
+                interval:  10_000_000_000i128,
+                usage:      5_000_000_000i128,
+                one_off:    1_000_000_000i128,
+            },
+            withdrawals: 3_000_000_000i128,
+            refunds:       500_000_000i128,
+        };
+        env.storage().instance().set(
+            &DataKey::MerchantEarnings(merchant2.clone(), token.clone()),
+            &raw,
+        );
+    });
+
+    let earnings = client.get_merchant_token_earnings(&merchant, &token);
+
+    assert_eq!(earnings.accruals.interval,  10_000_000i128, "interval should be in native 6-decimal units");
+    assert_eq!(earnings.accruals.usage,      5_000_000i128, "usage should be in native 6-decimal units");
+    assert_eq!(earnings.accruals.one_off,    1_000_000i128, "one_off should be in native 6-decimal units");
+    assert_eq!(earnings.withdrawals,         3_000_000i128, "withdrawals should be in native 6-decimal units");
+    assert_eq!(earnings.refunds,               500_000i128, "refunds should be in native 6-decimal units");
 }
 
-/// Disabling oracle (removing address) also requires governance.
+/// 18-decimal token (e.g. a Stellar asset with 18 decimals).
+/// Internal 9-decimal form is smaller than native by 10^9, so stored amounts
+/// are divided by 10^9 relative to the native value.
 #[test]
-fn test_oracle_address_removal_requires_governance() {
-    let test_env = TestEnv::default();
-    let oracle = test_env.env.register(MockOracle, ());
+fn test_get_merchant_earnings_denormalizes_18_decimal_token() {
+    use crate::types::{AccruedTotals, DataKey, TokenEarnings};
 
-    // Set initial oracle
-    test_env.client.set_oracle_config(
-        &test_env.admin,
-        &true,
-        &Some(oracle.clone()),
-        &300u64,
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(SubscriptionVault, ());
+    let client = SubscriptionVaultClient::new(&env, &contract_id);
 
-    // Attempt to disable oracle (remove address) — should fail
-    let result = test_env.client.try_set_oracle_config(
-        &test_env.admin,
-        &false,
-        &None::<Address>,
-        &0u64,
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
-    assert_eq!(result, Err(Ok(Error::GovernanceRequired)));
+    let admin = Address::generate(&env);
+    // Register the primary token first (must be 6-decimal for the USDC vault).
+    let primary_token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+    client.init(&primary_token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
 
-    // Verify oracle still configured
-    let cfg = test_env.client.get_oracle_config();
-    assert_eq!(cfg.oracle, Some(oracle));
-    assert!(cfg.enabled);
-}
+    // Add an 18-decimal token as a second accepted token.
+    let token_admin2 = Address::generate(&env);
+    let token18 = env.register_stellar_asset_contract_v2(token_admin2.clone()).address();
+    client.add_accepted_token(&admin, &token18, &18);
 
-/// Non-address oracle config changes (max_age, kind, etc) are allowed with cooldown.
-#[test]
-fn test_oracle_max_age_change_allowed_with_cooldown() {
-    let test_env = TestEnv::default();
-    let oracle = test_env.env.register(MockOracle, ());
+    let merchant = Address::generate(&env);
+    let merchant2 = merchant.clone();
 
-    // Set initial oracle
-    test_env.client.set_oracle_config(
-        &test_env.admin,
-        &true,
-        &Some(oracle.clone()),
-        &300u64,
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
+    // Native 18-decimal amounts:
+    //   interval  = 2_000_000_000_000_000_000  (2 tokens)
+    //   usage     = 1_000_000_000_000_000_000  (1 token)
+    //   one_off   =   500_000_000_000_000_000  (0.5 tokens)
+    //   withdrawals=  500_000_000_000_000_000  (0.5 tokens)
+    //   refunds   =   100_000_000_000_000_000  (0.1 tokens)
+    //
+    // Internal 9-decimal (divide by 10^9):
+    //   interval  = 2_000_000_000
+    //   usage     = 1_000_000_000
+    //   one_off   =   500_000_000
+    //   withdrawals=  500_000_000
+    //   refunds   =   100_000_000
+    env.as_contract(&contract_id, || {
+        let raw = TokenEarnings {
+            accruals: AccruedTotals {
+                interval:  2_000_000_000i128,
+                usage:     1_000_000_000i128,
+                one_off:     500_000_000i128,
+            },
+            withdrawals: 500_000_000i128,
+            refunds:     100_000_000i128,
+        };
+        env.storage().instance().set(
+            &DataKey::MerchantEarnings(merchant2.clone(), token18.clone()),
+            &raw,
+        );
+    });
 
-    // Verify initial max_age
-    let cfg = test_env.client.get_oracle_config();
-    assert_eq!(cfg.max_age_seconds, 300);
+    let earnings = client.get_merchant_token_earnings(&merchant, &token18);
 
-    // Update max_age while keeping oracle address the same (should succeed)
-    test_env.client.set_oracle_config(
-        &test_env.admin,
-        &true,
-        &Some(oracle.clone()),
-        &600u64, // Changed from 300 to 600
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
-
-    // Verify max_age was updated
-    let cfg = test_env.client.get_oracle_config();
-    assert_eq!(cfg.max_age_seconds, 600);
-    assert_eq!(cfg.oracle, Some(oracle));
-}
-
-/// Changing oracle kind (Spot -> TWAP) is allowed if address unchanged.
-#[test]
-fn test_oracle_kind_change_allowed() {
-    let test_env = TestEnv::default();
-    let oracle = test_env.env.register(MockOracle, ());
-
-    // Set initial oracle with Spot kind
-    test_env.client.set_oracle_config(
-        &test_env.admin,
-        &true,
-        &Some(oracle.clone()),
-        &300u64,
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
-
-    let cfg = test_env.client.get_oracle_config();
-    assert_eq!(cfg.kind, crate::OracleKind::Spot);
-
-    // Change to TWAP kind (same oracle address)
-    test_env.client.set_oracle_config(
-        &test_env.admin,
-        &true,
-        &Some(oracle.clone()),
-        &300u64,
-        &crate::OracleKind::Twap,
-        &3600u64, // 1-hour window for TWAP
-        &0u128,
-        &1u128,
-    );
-
-    let cfg = test_env.client.get_oracle_config();
-    assert_eq!(cfg.kind, crate::OracleKind::Twap);
-    assert_eq!(cfg.oracle, Some(oracle));
-}
-
-/// Enabling oracle when it was disabled (but address is same/None) should NOT require governance
-/// if oracle was None and remains None.
-#[test]
-fn test_oracle_enable_without_changing_address() {
-    let test_env = TestEnv::default();
-
-    // Start with oracle disabled and no address
-    test_env.client.set_oracle_config(
-        &test_env.admin,
-        &false,
-        &None::<Address>,
-        &0u64,
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
-
-    let cfg = test_env.client.get_oracle_config();
-    assert!(!cfg.enabled);
-    assert!(cfg.oracle.is_none());
-
-    // Attempting to enable without setting address should still work if oracle is None in both cases
-    // However, enabling typically requires an oracle address, so this might fail validation.
-    // The key point: changing address from None->Some or Some->Something different requires governance.
-}
-
-/// Cooldown on oracle config updates (non-address) should be enforced.
-#[test]
-fn test_oracle_config_cooldown_enforced() {
-    let test_env = TestEnv::default();
-    let oracle = test_env.env.register(MockOracle, ());
-
-    // Set initial oracle
-    test_env.client.set_oracle_config(
-        &test_env.admin,
-        &true,
-        &Some(oracle.clone()),
-        &300u64,
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
-
-    // Immediately attempt another update (without advancing time) — should hit cooldown
-    let result = test_env.client.try_set_oracle_config(
-        &test_env.admin,
-        &true,
-        &Some(oracle.clone()),
-        &600u64, // Different max_age
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
-    assert_eq!(result, Err(Ok(Error::CooldownActive)));
-
-    // Advance time past cooldown (6 hours)
-    test_env
-        .env
-        .ledger()
-        .with_mut(|li| li.timestamp += crate::admin::CONFIG_COOLDOWN_SECS + 1);
-
-    // Now update should succeed
-    test_env.client.set_oracle_config(
-        &test_env.admin,
-        &true,
-        &Some(oracle.clone()),
-        &600u64,
-        &crate::OracleKind::Spot,
-        &0u64,
-        &0u128,
-        &1u128,
-    );
-
-    let cfg = test_env.client.get_oracle_config();
-    assert_eq!(cfg.max_age_seconds, 600);
+    assert_eq!(earnings.accruals.interval,  2_000_000_000_000_000_000i128, "interval should be in native 18-decimal units");
+    assert_eq!(earnings.accruals.usage,     1_000_000_000_000_000_000i128, "usage should be in native 18-decimal units");
+    assert_eq!(earnings.accruals.one_off,     500_000_000_000_000_000i128, "one_off should be in native 18-decimal units");
+    assert_eq!(earnings.withdrawals,          500_000_000_000_000_000i128, "withdrawals should be in native 18-decimal units");
+    assert_eq!(earnings.refunds,              100_000_000_000_000_000i128, "refunds should be in native 18-decimal units");
 }

@@ -771,7 +771,10 @@ fn merchant_balance_key(merchant: &Address, token: &Address) -> DataKey {
     DataKey::MerchantBalance(merchant.clone(), token.clone())
 }
 
-pub fn get_merchant_token_earnings(
+/// Returns the raw stored `TokenEarnings` in internal 9-decimal form.
+/// Used internally by all write paths (charge, withdraw, refund) that need
+/// the stored representation to accumulate or compare amounts.
+fn get_merchant_token_earnings_raw(
     env: &Env,
     merchant: &Address,
     token: &Address,
@@ -786,6 +789,38 @@ pub fn get_merchant_token_earnings(
         withdrawals: 0,
         refunds: 0,
     })
+}
+
+/// Returns `TokenEarnings` with all amounts converted to the token's **native
+/// decimal** representation.  Callers that need the internal 9-decimal amounts
+/// for arithmetic (charge, withdraw, refund) must use
+/// `get_merchant_token_earnings_raw` instead.
+pub fn get_merchant_token_earnings(
+    env: &Env,
+    merchant: &Address,
+    token: &Address,
+) -> TokenEarnings {
+    let raw = get_merchant_token_earnings_raw(env, merchant, token);
+    denormalize_token_earnings(env, token, raw)
+}
+
+/// Denormalises every `i128` field in `raw` from the internal 9-decimal
+/// representation to the token's native decimals.  On any conversion error
+/// (token not registered, overflow) the original raw value is preserved so
+/// that a query failure degrades gracefully rather than panicking.
+fn denormalize_token_earnings(env: &Env, token: &Address, raw: TokenEarnings) -> TokenEarnings {
+    let dn = |v: i128| {
+        crate::types::denormalize_amount(env, token, v).unwrap_or(v)
+    };
+    TokenEarnings {
+        accruals: AccruedTotals {
+            interval: dn(raw.accruals.interval),
+            usage:    dn(raw.accruals.usage),
+            one_off:  dn(raw.accruals.one_off),
+        },
+        withdrawals: dn(raw.withdrawals),
+        refunds:     dn(raw.refunds),
+    }
 }
 
 fn set_merchant_token_earnings(
@@ -907,7 +942,7 @@ pub fn get_reconciliation_snapshot(
     let mut result = Vec::new(env);
 
     for token in tokens.iter() {
-        let earnings = get_merchant_token_earnings(env, merchant, &token);
+        let earnings = get_merchant_token_earnings_raw(env, merchant, &token);
         let total_accruals = earnings
             .accruals
             .interval
@@ -983,7 +1018,7 @@ pub fn credit_merchant_balance_for_token(
     set_merchant_balance(env, merchant, token_addr, &new_balance);
 
     // ── EFFECTS: earnings update (SINGLE SOURCE OF TRUTH)
-    let mut earnings = get_merchant_token_earnings(env, merchant, token_addr);
+    let mut earnings = get_merchant_token_earnings_raw(env, merchant, token_addr);
 
     match kind {
         BillingChargeKind::Interval => {
@@ -1126,14 +1161,14 @@ pub fn withdraw_merchant_funds_for_token(
     // ─────────────── EFFECTS ───────────────
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
 
-    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    let mut earnings = get_merchant_token_earnings_raw(env, &merchant, &token_addr);
     earnings.refunds = earnings
         .refunds
         .checked_add(amount)
         .ok_or(Error::Overflow)?;
     set_merchant_token_earnings(env, &merchant, &token_addr, &earnings);
     crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
-    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    let mut earnings = get_merchant_token_earnings_raw(env, &merchant, &token_addr);
     earnings.withdrawals = earnings
         .withdrawals
         .checked_add(amount)
@@ -1219,7 +1254,7 @@ pub fn merchant_refund(
     set_merchant_balance(env, &merchant, &token_addr, &new_balance);
     crate::accounting::sub_total_accounted(env, &token_addr, amount)?;
 
-    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    let mut earnings = get_merchant_token_earnings_raw(env, &merchant, &token_addr);
     earnings.refunds = earnings
         .refunds
         .checked_add(amount)
@@ -1333,7 +1368,7 @@ fn flush_merchant_token(
     // EFFECTS — update state before external call
     set_merchant_balance(env, merchant, token, &0i128);
 
-    let mut earnings = get_merchant_token_earnings(env, merchant, token);
+    let mut earnings = get_merchant_token_earnings_raw(env, merchant, token);
     earnings.withdrawals = earnings
         .withdrawals
         .checked_add(balance)
@@ -1715,7 +1750,7 @@ pub fn do_emit_merchant_balance_snapshot(
     crate::admin::require_admin_auth(env, &admin)?;
 
     let balance = get_merchant_balance_by_token(env, &merchant, &token);
-    let earnings = get_merchant_token_earnings(env, &merchant, &token);
+    let earnings = get_merchant_token_earnings_raw(env, &merchant, &token);
     let accrued = earnings
         .accruals
         .interval
@@ -1775,7 +1810,7 @@ pub fn do_emit_all_balances_snapshot(
                 seen.push_back(pair.clone());
 
                 let balance = get_merchant_balance_by_token(env, &pair.0, &pair.1);
-                let earnings = get_merchant_token_earnings(env, &pair.0, &pair.1);
+                let earnings = get_merchant_token_earnings_raw(env, &pair.0, &pair.1);
                 let accrued = earnings
                     .accruals
                     .interval
@@ -2168,7 +2203,7 @@ pub fn withdraw_sub_account_funds(
     env.storage().instance().set(&bal_key, &new_balance);
 
     // EFFECTS: Update parent earnings (withdrawal tracked at parent level)
-    let mut earnings = get_merchant_token_earnings(env, &merchant, &token_addr);
+    let mut earnings = get_merchant_token_earnings_raw(env, &merchant, &token_addr);
     earnings.withdrawals = earnings
         .withdrawals
         .checked_add(amount)
