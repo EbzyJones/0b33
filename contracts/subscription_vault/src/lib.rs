@@ -2562,6 +2562,55 @@ impl SubscriptionVault {
         Ok(())
     }
 
+    /// Reactivate an `Expired` subscription back to `Active` (admin only).
+    ///
+    /// On the `Expired -> Active` transition the expiration timestamp is
+    /// extended to at least one billing interval in the future and the
+    /// ledger-sequence bound is cleared, so the reactivation grants a full
+    /// service period instead of re-expiring on the next charge cycle.
+    ///
+    /// # Arguments
+    ///
+    /// * `admin` — Must be the stored contract admin.
+    /// * `subscription_id` — Subscription to reactivate.
+    ///
+    /// # Errors
+    ///
+    /// * [`Error::Forbidden`] — `admin` is not the stored admin.
+    /// * [`Error::InvalidStatusTransition`] — subscription is not `Expired`
+    ///   (an already-`Active` subscription is an idempotent no-op).
+    ///
+    /// # Events
+    ///
+    /// Emits [`SubscriptionResumedEvent`] with `previous_status = Expired`.
+    pub fn reactivate_subscription(
+        env: Env,
+        admin: Address,
+        subscription_id: u32,
+    ) -> Result<(), Error> {
+        let old_sub = queries::get_subscription(&env, subscription_id)?;
+        subscription::do_reactivate_subscription(&env, admin.clone(), subscription_id)?;
+        // Only emit when a real reactivation occurred; an idempotent no-op
+        // (already Active) must not emit a spurious `sub_resumed` event.
+        if old_sub.status == SubscriptionStatus::Expired {
+            let sub = queries::get_subscription(&env, subscription_id)?;
+            env.events().publish(
+                (Symbol::new(&env, "sub_resumed"), subscription_id),
+                SubscriptionResumedEvent {
+                    subscription_id,
+                    subscriber: sub.subscriber,
+                    merchant: sub.merchant,
+                    authorizer: admin,
+                    previous_status: old_sub.status,
+                    timestamp: env.ledger().timestamp(),
+                    schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
+                },
+            );
+        }
+        Ok(())
+    }
+
     /// Archive an expired or cancelled subscription.
     pub fn cleanup_subscription(
         env: Env,
