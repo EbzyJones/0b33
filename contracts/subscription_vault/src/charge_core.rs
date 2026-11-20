@@ -217,6 +217,22 @@ pub fn charge_one(
     let mut sub = get_subscription(env, subscription_id)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
 
+    // A subscription with amount == 0 must never produce a charge event.
+    // Zero-amount subscriptions yield no-op accounting entries, pollute event
+    // streams with phantom SubscriptionChargedEvents, and consume storage
+    // budget for no value.  Reject immediately after load, before any
+    // merchant/blocklist/status work, so the error is cheap and observable.
+    if sub.amount <= 0 {
+        return Err(charge_fail(
+            env,
+            subscription_id,
+            Error::InvalidAmount,
+            0,
+            now,
+        ));
+    }
+
+
     // Merchant pause/vacation status — cached per merchant within a batch so
     // subscriptions sharing a merchant don't each re-read the same storage.
     let (merchant_paused, merchant_in_vacation) = match merchant_cache.as_deref_mut() {

@@ -390,7 +390,9 @@ pub fn get_dispute_window_secs(env: &Env) -> u64 {
 
 /// Apply a validated dispute-window value. Used by direct admin and governance paths.
 pub(crate) fn apply_dispute_window_secs(env: &Env, window_secs: u64) -> Result<(), Error> {
-    if window_secs == 0 || window_secs > u64::from(u32::MAX) {
+    if window_secs < crate::types::MIN_DISPUTE_WINDOW_SECS
+        || window_secs > crate::types::MAX_DISPUTE_WINDOW_SECS
+    {
         return Err(Error::InvalidInput);
     }
 

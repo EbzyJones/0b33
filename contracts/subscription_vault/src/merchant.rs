@@ -724,6 +724,15 @@ pub fn set_merchant_config(
     )?;
 
     let key = DataKey::MerchantConfig(merchant.clone());
+
+    // Snapshot old values for the diff event before overwriting.
+    let old = get_merchant_config(env, merchant.clone());
+    let (old_payout_address, old_fee_bips, old_allowed_operations) = match old {
+        Some(ref c) => (c.payout_address.clone(), c.fee_bips, c.allowed_operations),
+        // No prior config: treat the incoming config as both old and new.
+        None => (config.payout_address.clone(), config.fee_bips, config.allowed_operations),
+    };
+
     let timestamp = env.ledger().timestamp();
     let mut updated_config = config;
     updated_config.last_updated = timestamp;
@@ -733,6 +742,9 @@ pub fn set_merchant_config(
         (Symbol::new(env, "merchant_config_set"),),
         MerchantConfigUpdatedEvent {
             merchant: merchant.clone(),
+            old_payout_address,
+            old_fee_bips,
+            old_allowed_operations,
             payout_address: updated_config.payout_address.clone(),
             fee_bips: updated_config.fee_bips,
             allowed_operations: updated_config.allowed_operations,
@@ -1477,6 +1489,11 @@ pub fn update_merchant_config(
     let key = DataKey::MerchantConfig(merchant.clone());
     let mut config: MerchantConfig = env.storage().instance().get(&key).ok_or(Error::NotFound)?;
 
+    // Snapshot old values for the diff event before any field is mutated.
+    let old_payout_address = config.payout_address.clone();
+    let old_fee_bips = config.fee_bips;
+    let old_allowed_operations = config.allowed_operations;
+
     // Protected-field guard. Runs before any write so a rejection is a no-op.
     reject_protected_field_change(env, &merchant, &new_fee_bips, &new_allowed_operations)?;
 
@@ -1518,6 +1535,9 @@ pub fn update_merchant_config(
         (soroban_sdk::Symbol::new(env, "merchant_config_updated"),),
         MerchantConfigUpdatedEvent {
             merchant: merchant.clone(),
+            old_payout_address,
+            old_fee_bips,
+            old_allowed_operations,
             payout_address: config.payout_address.clone(),
             fee_bips: config.fee_bips,
             allowed_operations: config.allowed_operations,
