@@ -97,6 +97,9 @@
 //! | `get_recon_summary` | [`crate::queries::get_contract_reconciliation_summary`] |
 //! | `generate_reconciliation_proof` | [`crate::queries::generate_reconciliation_proof`] |
 //! | `query_prepaid_balances_paginated` | [`crate::queries::query_prepaid_balances_paginated`] |
+//! | `get_token_reconciliation_paginated` | [`crate::queries::get_token_reconciliation_paginated`] |
+//! | `generate_reconciliation_proof_paginated` | [`crate::queries::generate_reconciliation_proof_paginated`] |
+//! | `get_contract_reconciliation_summary_paginated` | [`crate::queries::get_contract_reconciliation_summary_paginated`] |
 //!
 //! ## Dispute Resolution (merchant / admin side)
 //! | Entrypoint | Delegate |
@@ -132,9 +135,10 @@ pub use crate::merchant::{
     withdraw_merchant_funds_for_token, withdraw_sub_account_funds,
 };
 pub use crate::queries::{
-    generate_reconciliation_proof, get_contract_reconciliation_summary, get_merchant_max_subs,
-    get_merchant_subscription_count, get_subscriptions_by_merchant,
+    generate_reconciliation_proof, generate_reconciliation_proof_paginated,
+    get_contract_reconciliation_summary, get_contract_reconciliation_summary_paginated,
+    get_merchant_max_subs, get_merchant_subscription_count, get_subscriptions_by_merchant,
     get_subscriptions_by_merchant_paginated, get_token_reconciliation,
-    query_prepaid_balances_paginated,
+    get_token_reconciliation_paginated, query_prepaid_balances_paginated,
 };
 pub use crate::subscription::do_set_merchant_max_subs;

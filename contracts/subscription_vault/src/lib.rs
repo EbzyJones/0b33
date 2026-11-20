@@ -760,8 +760,11 @@ pub use subscription::compute_cancel_refund;
 // ── Re-exports ────────────────────────────────────────────────────────────────
 pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
 pub use queries::{
-    compute_next_charge_info, generate_reconciliation_proof, get_contract_reconciliation_summary,
-    get_token_reconciliation, list_credit_limits, query_prepaid_balances_paginated, MAX_PREPAID_SCAN_DEPTH,
+    compute_next_charge_info, generate_reconciliation_proof,
+    generate_reconciliation_proof_paginated, get_contract_reconciliation_summary,
+    get_contract_reconciliation_summary_paginated, get_token_reconciliation,
+    get_token_reconciliation_paginated, list_credit_limits, list_credit_limits_paginated,
+    query_prepaid_balances_paginated, MAX_CREDIT_LIMITS_PAGE, MAX_PREPAID_SCAN_DEPTH,
     MAX_MERCHANT_CURSOR_DEPTH, MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIST_PAGE,
     MAX_TOKEN_SUMMARIES_PER_PAGE,
 };
@@ -2280,6 +2283,20 @@ impl SubscriptionVault {
         queries::list_credit_limits(&env, merchant)
     }
 
+    /// Cursor-paginated variant of `list_credit_limits` (#599).
+    ///
+    /// Bounds per-call work to at most `limit` index positions so merchants with
+    /// very large grant histories do not exhaust the per-transaction instruction
+    /// budget. Advance with `next_cursor` until it is `None`.
+    pub fn list_credit_limits_paginated(
+        env: Env,
+        merchant: Address,
+        cursor: Option<u32>,
+        limit: u32,
+    ) -> Result<queries::CreditLimitsPage, Error> {
+        queries::list_credit_limits_paginated(&env, merchant, cursor, limit)
+    }
+
     /// Set (or clear, with `cap = None`) an admin override of a subscriber's
     /// active-subscription cap — e.g. to raise the limit for an institutional
     /// account. Admin only. (#578)
@@ -3544,6 +3561,48 @@ impl SubscriptionVault {
         token: Address,
     ) -> Result<ReconciliationProof, Error> {
         queries::generate_reconciliation_proof(&env, token)
+    }
+
+    /// Cursor-paginated token reconciliation (#599).
+    ///
+    /// Bounds the subscription scan to at most `MAX_PREPAID_SCAN_DEPTH` IDs per
+    /// call; accumulate `partial_prepaid` across pages via `next_cursor`.
+    pub fn get_token_reconciliation_paginated(
+        env: Env,
+        token: Address,
+        cursor: Option<u32>,
+        scan_limit: u32,
+    ) -> Result<queries::TokenReconciliationPage, Error> {
+        queries::get_token_reconciliation_paginated(&env, token, cursor, scan_limit)
+    }
+
+    /// Cursor-paginated auditable reconciliation proof (#599).
+    pub fn generate_reconciliation_proof_paginated(
+        env: Env,
+        token: Address,
+        cursor: Option<u32>,
+        scan_limit: u32,
+    ) -> Result<queries::ReconciliationProofPage, Error> {
+        queries::generate_reconciliation_proof_paginated(&env, token, cursor, scan_limit)
+    }
+
+    /// Cursor-paginated multi-token reconciliation summary (#599).
+    ///
+    /// Performs a single bounded subscription scan shared across the token
+    /// window; iterate `next_subscription_cursor` to completion, then advance to
+    /// `next_token_index`.
+    pub fn get_contract_reconciliation_summary_paginated(
+        env: Env,
+        start_token_index: u32,
+        limit: u32,
+        subscription_cursor: Option<u32>,
+    ) -> Result<queries::ReconciliationSummaryScanPage, Error> {
+        queries::get_contract_reconciliation_summary_paginated(
+            &env,
+            start_token_index,
+            limit,
+            subscription_cursor,
+        )
     }
 
     /// Paginated prepaid balance query.

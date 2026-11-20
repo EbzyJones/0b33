@@ -520,6 +520,54 @@ fn test_vacation_events_emitted() {
 }
 
 
+// ── Expired-entry cleanup (Issue #601) ───────────────────────────────────────
+
+#[test]
+fn test_expired_vacation_purged_on_first_charge() {
+    let (env, client, token_admin, _) = setup();
+    let (sub_id, merchant, _) = setup_merchant_and_sub(&env, &client, &token_admin);
+
+    let now = env.ledger().timestamp();
+
+    // Short vacation window that ends well before the first charge is due.
+    client.set_merchant_vacation(&merchant, &(now + 100), &(now + 200));
+    assert!(client.get_merchant_vacation(&merchant).is_some());
+
+    // Advance past the vacation end and past the first charge interval.
+    env.ledger().set_timestamp(now + 3601);
+
+    // The first charge after end_ts must purge the stale vacation entry.
+    client.charge_subscription(&sub_id, &None);
+
+    assert!(
+        client.get_merchant_vacation(&merchant).is_none(),
+        "expired vacation entry must be removed on the first charge after end_ts"
+    );
+}
+
+#[test]
+fn test_active_vacation_retained_on_blocked_charge() {
+    let (env, client, token_admin, _) = setup();
+    let (sub_id, merchant, _) = setup_merchant_and_sub(&env, &client, &token_admin);
+
+    let now = env.ledger().timestamp();
+
+    // Vacation window that is still active when the charge is attempted.
+    client.set_merchant_vacation(&merchant, &now, &(now + 7200));
+
+    // Advance past the first charge interval but stay inside the window.
+    env.ledger().set_timestamp(now + 3601);
+
+    let res = client.try_charge_subscription(&sub_id, &None);
+    assert_eq!(res, Err(Ok(Error::VacationActive)));
+
+    // A still-active window must NOT be flushed.
+    assert!(
+        client.get_merchant_vacation(&merchant).is_some(),
+        "an active vacation window must not be purged by the charge gate"
+    );
+}
+
 // ── Vacation Exit Edge Case ──────────────────────────────────────────────────
 
 #[test]

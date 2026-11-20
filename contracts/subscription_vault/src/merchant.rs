@@ -201,8 +201,12 @@ pub fn unpause_merchant(env: &Env, merchant: Address) -> Result<(), Error> {
 // - `start_ts` must be in the future or now (reject past start times).
 // - Setting a new vacation replaces any existing one.
 
-/// Returns the current vacation window for `merchant`, or `None` if not set
-/// or if the window has already expired.
+/// Returns the stored vacation window for `merchant`, or `None` if not set.
+///
+/// This is a raw read and does **not** filter out windows that have already
+/// expired. Expired entries are purged lazily by the charge path via
+/// [`flush_expired_vacation`]; use [`is_merchant_in_vacation`] for an
+/// expiry-aware check.
 pub fn get_merchant_vacation(env: &Env, merchant: &Address) -> Option<MerchantVacation> {
     let key = DataKey::MerchantVacation(merchant.clone());
     env.storage().instance().get(&key)
@@ -212,6 +216,27 @@ pub fn get_merchant_vacation(env: &Env, merchant: &Address) -> Option<MerchantVa
 pub fn is_merchant_in_vacation(env: &Env, merchant: &Address, now: u64) -> bool {
     if let Some(v) = get_merchant_vacation(env, merchant) {
         return now >= v.start_ts && now < v.end_ts;
+    }
+    false
+}
+
+/// Purge a merchant's `MerchantVacation` entry once its window has ended.
+///
+/// A vacation window is finished as soon as `now >= end_ts`; from that point the
+/// entry is dead weight in storage. Charge paths invoke this at the
+/// vacation-check gate so the first charge after `end_ts` removes the stale
+/// record, preventing vacation entries from accumulating for every merchant that
+/// has ever used vacation mode (Issue #601).
+///
+/// Returns `true` if an expired entry was removed. A window that is still active
+/// at `now` is left untouched.
+pub fn flush_expired_vacation(env: &Env, merchant: &Address, now: u64) -> bool {
+    let key = DataKey::MerchantVacation(merchant.clone());
+    if let Some(v) = env.storage().instance().get::<_, MerchantVacation>(&key) {
+        if now >= v.end_ts {
+            env.storage().instance().remove(&key);
+            return true;
+        }
     }
     false
 }

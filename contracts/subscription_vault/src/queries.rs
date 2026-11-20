@@ -30,9 +30,13 @@
 //! | `list_subscriptions_by_subscriber` | Paginated subscription IDs | ✅ Yes | None |
 //! | `list_recoverable_subscriptions` | Paginated stranded (cancelled + non-zero prepaid) subscriptions | ✅ Yes | None |
 //! | `list_credit_limits` | Active credit-limit grants for a merchant | ✅ Yes | None |
+//! | `list_credit_limits_paginated` | Cursor-paginated active credit-limit grants | ✅ Yes | None |
 //! | `get_token_reconciliation` | Accounting totals for a token (no secrets) | ✅ Yes | None — balance totals are public; no admin credential exposed |
 //! | `get_contract_reconciliation_summary` | Multi-token accounting summaries | ✅ Yes | None |
 //! | `generate_reconciliation_proof` | Auditable accounting snapshot | ✅ Yes | None |
+//! | `get_token_reconciliation_paginated` | Partial (bounded) token accounting subtotals | ✅ Yes | None |
+//! | `generate_reconciliation_proof_paginated` | Partial (bounded) auditable accounting snapshots | ✅ Yes | None |
+//! | `get_contract_reconciliation_summary_paginated` | Partial multi-token accounting subtotals | ✅ Yes | None |
 //! | `query_prepaid_balances_paginated` | Partial prepaid totals (paginated) | ✅ Yes | None |
 //!
 //! ### Why no view function can bypass the emergency stop
@@ -94,6 +98,21 @@
 //! - **`list_subscriptions_by_token`**: Cursor-based traversal of the same token index in
 //!   insertion order. `cursor` is a 0-based offset (`None` starts at the beginning); continue
 //!   with `next_cursor`. The returned `total` is the token index length.
+//! - **`list_credit_limits_paginated`**: Cursor is a 0-based offset into the
+//!   `MerchantCreditLimits` index (`None` starts at the beginning). Each call consumes at most
+//!   `limit` index positions; revoked/expired grants inside the window are skipped, so a page can
+//!   hold fewer than `limit` entries while `next_cursor` is still `Some`. Continue with
+//!   `next_cursor` until it is `None`. `total` is the index length.
+//! - **`get_token_reconciliation_paginated`** / **`generate_reconciliation_proof_paginated`**:
+//!   Cursor is a subscription-ID resume point (`None` starts at ID `0`). Each call scans at most
+//!   `MAX_PREPAID_SCAN_DEPTH` IDs and returns the prepaid subtotal for that window; sum
+//!   `partial_prepaid` across pages until `has_more` is `false`. These are the bounded
+//!   counterparts of the full-scan `get_token_reconciliation` / `generate_reconciliation_proof`.
+//! - **`get_contract_reconciliation_summary_paginated`**: Two-level iteration. `subscription_cursor`
+//!   is a subscription-ID resume point for the **current** token window; iterate it until the
+//!   returned `next_subscription_cursor` is `None`, accumulating each token's `partial_prepaid`,
+//!   then advance to `next_token_index` (if `Some`) and restart with `subscription_cursor = None`.
+//!   The per-call read budget (`MAX_PREPAID_SCAN_DEPTH`) is shared across the tokens in the window.
 //!
 //! ## Read complexity per endpoint
 //!
@@ -112,6 +131,15 @@
 //! | `get_plan_max_active_subs` | 1 | Direct key lookup |
 //! | `list_subscriptions_by_subscriber` | 1 + up to MAX_SCAN_DEPTH | 1 index read + capped scan of that subscriber's ids |
 //! | `list_recoverable_subscriptions` | up to MAX_SCAN_DEPTH | Capped full-ID scan; cancelled subs are absent from every secondary index |
+//! | `list_credit_limits` | 1 + N | 1 index read + one record read per index entry (unbounded) |
+//! | `list_credit_limits_paginated` | 1 + limit | 1 index read + up to `limit` record reads |
+//! | `get_token_reconciliation` | up to MAX_SCAN_DEPTH | Full `0..NextId` subscription scan (unbounded on large contracts) |
+//! | `get_token_reconciliation_paginated` | up to MAX_PREPAID_SCAN_DEPTH | Bounded ID window + 1 token balance read |
+//! | `generate_reconciliation_proof` | up to MAX_SCAN_DEPTH | Full `0..NextId` subscription scan (unbounded on large contracts) |
+//! | `generate_reconciliation_proof_paginated` | up to MAX_PREPAID_SCAN_DEPTH | Bounded ID window + 1 token balance read |
+//! | `get_contract_reconciliation_summary` | tokens × MAX_SCAN_DEPTH | Per-token full subscription scan (unbounded on large contracts) |
+//! | `get_contract_reconciliation_summary_paginated` | up to MAX_PREPAID_SCAN_DEPTH | Shared across the token window |
+//! | `query_prepaid_balances_paginated` | up to MAX_PREPAID_SCAN_DEPTH | Bounded ID window |
 //!
 //! **Index deserialization note**: merchant and token subscription queries read the
 //! entire index `Vec<u32>` from a single storage key before slicing it. For merchants
@@ -125,6 +153,9 @@
 //! - `DataKey::MerchantSubs(Address)`
 //! - `DataKey::TokenSubs(Address)`
 //! - `DataKey::PlanMaxActive(u32)`
+//! - `DataKey::MerchantCreditLimits(Address)`
+//! - `DataKey::CreditLimit(Address, Address)`
+//! - `DataKey::AcceptedTokens`
 //! - `DataKey::NextId`
 
 use crate::safe_math::{safe_mul, safe_sub};
@@ -171,6 +202,16 @@ pub const MAX_QUERY_RESULTS: u32 = 100;
 /// sensible contract interaction; it keeps per-call cost predictable while still
 /// allowing full enumeration via chaining.
 pub const MAX_SCAN_DEPTH: u32 = 1_000;
+
+/// Hard upper bound on the `limit` parameter for
+/// [`list_credit_limits_paginated`].
+///
+/// The `MerchantCreditLimits` index can grow without bound as a merchant issues
+/// grants, so an uncapped call would read every entry in the index. This cap
+/// bounds the number of index positions consumed (and therefore the number of
+/// `CreditLimit` record reads) per call. Requests with `limit == 0` or
+/// `limit > MAX_CREDIT_LIMITS_PAGE` are rejected with [`Error::InvalidInput`].
+pub const MAX_CREDIT_LIMITS_PAGE: u32 = 100;
 
 pub fn get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
     let mut sub = try_get_subscription(env, subscription_id)?;
@@ -709,6 +750,114 @@ pub fn list_credit_limits(
     out
 }
 
+/// One page of active credit-limit grants returned by
+/// [`list_credit_limits_paginated`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreditLimitsPage {
+    /// Active grants found in the scanned slice of the index, in index order.
+    pub entries: Vec<crate::types::CreditLimitEntry>,
+    /// Index offset to resume from on the next call, or `None` once the whole
+    /// index has been served.
+    pub next_cursor: Option<u32>,
+    /// Total number of entries in the `MerchantCreditLimits` index (including
+    /// revoked/expired grants), so callers can size their pagination loop.
+    pub total: u32,
+}
+
+/// Cursor-paginated variant of [`list_credit_limits`].
+///
+/// The unbounded form reads **every** position of the `MerchantCreditLimits`
+/// index in a single call. For a merchant with a very large grant history that
+/// exhausts the per-transaction instruction budget and fails with an opaque
+/// network error. This variant bounds the work per call: it consumes at most
+/// `limit` index positions (and therefore performs at most `limit` record
+/// reads), returning a `next_cursor` continuation when more remain.
+///
+/// # Arguments
+///
+/// * `cursor` — 0-based offset into the index; `None` starts at the first
+///   entry. Pass the returned `next_cursor` to fetch the next page.
+/// * `limit` — maximum number of index positions to inspect; must be in
+///   `1..=MAX_CREDIT_LIMITS_PAGE`.
+///
+/// # Returns
+///
+/// A [`CreditLimitsPage`]. `entries` contains only grants that are currently
+/// enforceable (limit `> 0` and not past `expires_at`); revoked or expired
+/// entries inside the window are skipped without shrinking the cursor stride,
+/// so a page may hold fewer than `limit` entries while `next_cursor` is still
+/// `Some`. Continue until `next_cursor` is `None`.
+///
+/// Unauthenticated — like [`list_credit_limits`], the returned entries are
+/// observable from public state.
+pub fn list_credit_limits_paginated(
+    env: &Env,
+    merchant: Address,
+    cursor: Option<u32>,
+    limit: u32,
+) -> Result<CreditLimitsPage, Error> {
+    if limit == 0 || limit > MAX_CREDIT_LIMITS_PAGE {
+        return Err(Error::InvalidInput);
+    }
+
+    let now = env.ledger().timestamp();
+    let index_key = DataKey::MerchantCreditLimits(merchant);
+    let index: Vec<(Address, Address)> = env
+        .storage()
+        .instance()
+        .get(&index_key)
+        .unwrap_or(Vec::new(env));
+    let total = index.len();
+
+    let start = cursor.unwrap_or(0);
+    if start >= total {
+        return Ok(CreditLimitsPage {
+            entries: Vec::new(env),
+            next_cursor: None,
+            total,
+        });
+    }
+
+    let end = start.saturating_add(limit).min(total);
+    let mut entries = Vec::new(env);
+    for (subscriber, token) in index
+        .iter()
+        .skip(start as usize)
+        .take((end - start) as usize)
+    {
+        let key = DataKey::CreditLimit(subscriber.clone(), token.clone());
+        if let Some(rec) = env
+            .storage()
+            .instance()
+            .get::<_, crate::types::CreditLimitRecord>(&key)
+        {
+            // Skip revoked (limit == 0) and expired grants.
+            if rec.limit == 0 {
+                continue;
+            }
+            if let Some(exp) = rec.expires_at {
+                if now >= exp {
+                    continue;
+                }
+            }
+            entries.push_back(crate::types::CreditLimitEntry {
+                subscriber: subscriber.clone(),
+                token: token.clone(),
+                limit: rec.limit,
+                expires_at: rec.expires_at,
+            });
+        }
+    }
+
+    let next_cursor = if end < total { Some(end) } else { None };
+    Ok(CreditLimitsPage {
+        entries,
+        next_cursor,
+        total,
+    })
+}
+
 /// One entry of a [`RecoverableSubscriptionsPage`] page.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1118,7 +1267,306 @@ pub fn query_prepaid_balances_paginated(
     }
 }
 
+// ── Bounded (cursor-paginated) reconciliation variants ──────────────────────
+//
+// The entrypoints above that return a complete reconciliation result
+// (`get_token_reconciliation`, `generate_reconciliation_proof`,
+// `get_contract_reconciliation_summary`) each perform a full `0..NextId`
+// subscription scan. On a large contract that scan exhausts the per-transaction
+// instruction budget and the call fails with an opaque network error, which
+// breaks off-chain reconciliation pipelines. The `*_paginated` variants below
+// bound the work per call to at most `MAX_PREPAID_SCAN_DEPTH` subscription reads
+// and return a continuation cursor; callers accumulate the partial totals.
+
+/// One bounded page of a token-level reconciliation scan.
+///
+/// Returned by [`get_token_reconciliation_paginated`] and
+/// [`generate_reconciliation_proof_paginated`]. Each page covers at most
+/// `MAX_PREPAID_SCAN_DEPTH` subscription IDs; sum `partial_prepaid` across pages
+/// (following `next_cursor`) to rebuild the token's full prepaid total.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenReconciliationPage {
+    pub token: Address,
+    /// Ledger timestamp at which this page was produced.
+    pub timestamp: u64,
+    /// Ledger sequence at which this page was produced.
+    pub ledger_sequence: u32,
+    /// Contract's current token balance — an O(1) read, not part of the scan.
+    pub contract_balance: i128,
+    /// Prepaid balance summed over the scanned subscription window only.
+    pub partial_prepaid: i128,
+    /// Subscriptions with a non-zero prepaid balance found in the window.
+    pub subscriptions_count: u32,
+    /// Subscription ID to resume from on the next call, or `None` when the scan
+    /// has reached the end of the ID space.
+    pub next_cursor: Option<u32>,
+    /// `true` while `next_cursor` is `Some` (more IDs remain unscanned).
+    pub has_more: bool,
+}
+
+/// Cursor-paginated variant of [`get_token_reconciliation`].
+///
+/// The unbounded form scans every subscription ID up to `NextId`, which fails on
+/// large contracts. This variant scans at most `MAX_PREPAID_SCAN_DEPTH` IDs per
+/// call and returns a partial prepaid subtotal plus a `next_cursor`. Accumulate
+/// `partial_prepaid` across pages until `has_more` is `false`, then apply the
+/// accounting equation off-chain.
+///
+/// Returns [`Error::InvalidToken`] if `token` is not accepted by the contract.
+///
+/// `scan_limit` is clamped to `1..=MAX_PREPAID_SCAN_DEPTH`; it controls the size
+/// of the scanned ID window, not the number of results.
+pub fn get_token_reconciliation_paginated(
+    env: &Env,
+    token: Address,
+    cursor: Option<u32>,
+    scan_limit: u32,
+) -> Result<TokenReconciliationPage, Error> {
+    if !crate::admin::is_token_accepted(env, &token) {
+        return Err(Error::InvalidToken);
+    }
+
+    let limit = scan_limit.clamp(1, MAX_PREPAID_SCAN_DEPTH);
+    let token_client = soroban_sdk::token::Client::new(env, &token);
+    let contract_balance = token_client.balance(&env.current_contract_address());
+
+    let (partial_prepaid, subscriptions_count, next_cursor) =
+        scan_prepaid_window(env, &token, cursor.unwrap_or(0), limit);
+
+    Ok(TokenReconciliationPage {
+        token,
+        timestamp: env.ledger().timestamp(),
+        ledger_sequence: env.ledger().sequence(),
+        contract_balance,
+        partial_prepaid,
+        subscriptions_count,
+        next_cursor,
+        has_more: next_cursor.is_some(),
+    })
+}
+
+/// One bounded page of an auditable reconciliation proof.
+///
+/// Returned by [`generate_reconciliation_proof_paginated`]. Same bounded-scan
+/// model as [`TokenReconciliationPage`], but each page carries the ledger
+/// anchoring (`timestamp` / `ledger_sequence`) so auditors can pin every chunk
+/// to a ledger state.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconciliationProofPage {
+    /// Ledger timestamp at which this page was produced.
+    pub timestamp: u64,
+    /// Ledger sequence at which this page was produced.
+    pub ledger_sequence: u32,
+    pub token: Address,
+    /// Contract's current token balance — an O(1) read, not part of the scan.
+    pub contract_balance: i128,
+    /// Prepaid balance summed over the scanned subscription window only.
+    pub partial_prepaid: i128,
+    /// Subscriptions with a non-zero prepaid balance found in the window.
+    pub subscription_count: u32,
+    /// Subscription ID to resume from on the next call, or `None` when the scan
+    /// has reached the end of the ID space.
+    pub next_cursor: Option<u32>,
+    /// `true` while `next_cursor` is `Some` (more IDs remain unscanned).
+    pub has_more: bool,
+}
+
+/// Cursor-paginated variant of [`generate_reconciliation_proof`].
+///
+/// Identical bounded-scan model to [`get_token_reconciliation_paginated`] but
+/// carries the ledger anchoring (`timestamp` / `ledger_sequence`) on each page so
+/// auditors can pin every chunk to a ledger state. Accumulate `partial_prepaid`
+/// across pages until `has_more` is `false` to rebuild the token's total.
+///
+/// Returns [`Error::InvalidToken`] if `token` is not accepted by the contract.
+pub fn generate_reconciliation_proof_paginated(
+    env: &Env,
+    token: Address,
+    cursor: Option<u32>,
+    scan_limit: u32,
+) -> Result<ReconciliationProofPage, Error> {
+    if !crate::admin::is_token_accepted(env, &token) {
+        return Err(Error::InvalidToken);
+    }
+
+    let limit = scan_limit.clamp(1, MAX_PREPAID_SCAN_DEPTH);
+    let token_client = soroban_sdk::token::Client::new(env, &token);
+    let contract_balance = token_client.balance(&env.current_contract_address());
+
+    let (partial_prepaid, subscription_count, next_cursor) =
+        scan_prepaid_window(env, &token, cursor.unwrap_or(0), limit);
+
+    Ok(ReconciliationProofPage {
+        timestamp: env.ledger().timestamp(),
+        ledger_sequence: env.ledger().sequence(),
+        token,
+        contract_balance,
+        partial_prepaid,
+        subscription_count,
+        next_cursor,
+        has_more: next_cursor.is_some(),
+    })
+}
+
+/// A partial (bounded) reconciliation summary for a single token.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TokenPartialSummary {
+    pub token: Address,
+    /// Prepaid balance summed over the scanned subscription window only.
+    pub partial_prepaid: i128,
+    /// Subscriptions with a non-zero prepaid balance found in the window.
+    pub subscriptions_count: u32,
+}
+
+/// A bounded page of the multi-token reconciliation summary.
+///
+/// Returned by [`get_contract_reconciliation_summary_paginated`].
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReconciliationSummaryScanPage {
+    /// Partial summaries for the tokens in the requested token window.
+    pub token_summaries: Vec<TokenPartialSummary>,
+    /// Token index to advance to once the subscription scan for this token
+    /// window is complete (`next_subscription_cursor == None`).
+    pub next_token_index: Option<u32>,
+    /// Subscription ID to resume the scan from for the **current** token window,
+    /// or `None` when the window has been fully scanned.
+    pub next_subscription_cursor: Option<u32>,
+}
+
+/// Cursor-paginated variant of [`get_contract_reconciliation_summary`].
+///
+/// The unbounded form calls [`get_token_reconciliation`] for each token in the
+/// window, and each of those performs a full `0..NextId` subscription scan. This
+/// variant instead performs a single bounded subscription scan (at most
+/// `MAX_PREPAID_SCAN_DEPTH` reads in total, shared evenly across the tokens in
+/// the window) and returns per-token partial prepaid subtotals.
+///
+/// # Two-level iteration (off-chain)
+///
+/// 1. Start with `start_token_index = 0`, a `limit`, and
+///    `subscription_cursor = None`.
+/// 2. Call repeatedly, feeding the returned `next_subscription_cursor` back in
+///    and accumulating each token's `partial_prepaid`, until the returned
+///    `next_subscription_cursor` is `None`. At that point the token window has
+///    been fully scanned.
+/// 3. Advance to the returned `next_token_index` (if `Some`) and repeat from
+///    step 2 with `subscription_cursor = None`.
+///
+/// `limit == 0` is rejected with [`Error::InvalidInput`].
+pub fn get_contract_reconciliation_summary_paginated(
+    env: &Env,
+    start_token_index: u32,
+    limit: u32,
+    subscription_cursor: Option<u32>,
+) -> Result<ReconciliationSummaryScanPage, Error> {
+    let token_count = limit.min(MAX_TOKEN_SUMMARIES_PER_PAGE);
+    if token_count == 0 {
+        return Err(Error::InvalidInput);
+    }
+
+    let accepted_tokens: Vec<Address> = env
+        .storage()
+        .instance()
+        .get(&DataKey::AcceptedTokens)
+        .unwrap_or(Vec::new(env));
+    let total_tokens = accepted_tokens.len();
+
+    if start_token_index >= total_tokens {
+        return Ok(ReconciliationSummaryScanPage {
+            token_summaries: Vec::new(env),
+            next_token_index: None,
+            next_subscription_cursor: None,
+        });
+    }
+
+    let end_index = start_token_index.saturating_add(token_count).min(total_tokens);
+    let next_token_index = if end_index < total_tokens {
+        Some(end_index)
+    } else {
+        None
+    };
+
+    // The per-call read budget is shared across the tokens in the window so the
+    // total subscription reads never exceed `MAX_PREPAID_SCAN_DEPTH`.
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0u32);
+    let start_sub = subscription_cursor.unwrap_or(0);
+    let per_token_budget = (MAX_PREPAID_SCAN_DEPTH / token_count).max(1);
+    let scan_end = if next_id == 0 || start_sub >= next_id {
+        start_sub
+    } else {
+        start_sub.saturating_add(per_token_budget).min(next_id)
+    };
+    let next_subscription_cursor = if scan_end < next_id {
+        Some(scan_end)
+    } else {
+        None
+    };
+    let scan_window = scan_end.saturating_sub(start_sub);
+
+    let mut token_summaries = Vec::new(env);
+    for token in accepted_tokens
+        .iter()
+        .skip(start_token_index as usize)
+        .take((end_index - start_token_index) as usize)
+    {
+        let (partial_prepaid, subscriptions_count, _) =
+            scan_prepaid_window(env, &token, start_sub, scan_window);
+        token_summaries.push_back(TokenPartialSummary {
+            token,
+            partial_prepaid,
+            subscriptions_count,
+        });
+    }
+
+    Ok(ReconciliationSummaryScanPage {
+        token_summaries,
+        next_token_index,
+        next_subscription_cursor,
+    })
+}
+
 // ── Internal helpers for reconciliation ────────────────────────────────────
+
+/// Scans a bounded window `[start, start + scan_limit)` of subscription IDs and
+/// returns the `(prepaid subtotal, matching count, next_cursor)` for `token`.
+///
+/// `next_cursor` is `Some(id)` when unscanned IDs remain (so the caller can
+/// resume), or `None` when the window reached `NextId`. Prepaid balances are
+/// summed only when non-zero, matching [`query_prepaid_balances_paginated`].
+fn scan_prepaid_window(
+    env: &Env,
+    token: &Address,
+    start: u32,
+    scan_limit: u32,
+) -> (i128, u32, Option<u32>) {
+    let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0u32);
+    if next_id == 0 || start >= next_id || scan_limit == 0 {
+        return (0, 0, None);
+    }
+
+    let scan_end = start.saturating_add(scan_limit).min(next_id);
+    let mut total: i128 = 0;
+    let mut count: u32 = 0;
+    for id in start..scan_end {
+        if let Some(sub) = read_subscription(env, id) {
+            if sub.token == *token && sub.prepaid_balance > 0 {
+                total = total.saturating_add(sub.prepaid_balance);
+                count = count.saturating_add(1);
+            }
+        }
+    }
+
+    let next_cursor = if scan_end < next_id {
+        Some(scan_end)
+    } else {
+        None
+    };
+    (total, count, next_cursor)
+}
 
 fn compute_total_prepaid(env: &Env, token: &Address) -> i128 {
     let next_id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0u32);
