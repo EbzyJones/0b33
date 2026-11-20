@@ -326,3 +326,6 @@ See the [LICENSE](LICENSE) file in this repository (add one if not present). Con
 
 <!-- handsoff-issue-530 -->
 - #530: [#394] deposit_funds does not enforce MIN_TOPUP per individual deposit call
+
+<!-- handsoff-issue-531 -->
+- #531: [#395] EmergencyWithdrawIntent can be re-requested while previous intent is pending — cooldown reset exploit
