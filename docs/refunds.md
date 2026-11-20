@@ -14,6 +14,12 @@ merchant/admin time to respond.
 | `resolve_dispute(admin, dispute_id, resolve_to_subscriber)` | admin | Final resolution; routes escrowed funds to subscriber or merchant. |
 | `get_dispute(dispute_id)` | — | Returns the `Dispute` record. |
 | `get_subscription_dispute(subscription_id)` | — | Returns the active dispute ID for a subscription, if any. |
+| `set_dispute_window_secs(admin, window_secs)` | admin | Changes the global dispute response window; subject to the six-hour admin config cooldown. |
+| `get_dispute_window_secs()` | — | Returns the configured window, defaulting to 14 days. |
+
+The window must be between 1 and `u32::MAX` seconds. Guardians can also change it through a
+`SetDisputeWindow` governance proposal, which requires the configured quorum and
+timelock and bypasses the direct-admin cooldown.
 
 ### Resolution rules
 
@@ -31,19 +37,19 @@ Every successful dispute mutation emits a dedicated event:
 ```text
 topic:   ("dispute_opened", dispute_id)
 payload: DisputeOpenedEvent { dispute_id, subscription_id, subscriber, merchant,
-         amount, evidence_hash, timestamp, schema_version }
+         amount, evidence_hash, timestamp, schema_version, token }
 ```
 
 ```text
 topic:   ("dispute_responded", dispute_id)
 payload: DisputeRespondedEvent { dispute_id, subscription_id, admin_evidence_hash,
-         timestamp, schema_version }
+         timestamp, schema_version, token }
 ```
 
 ```text
 topic:   ("dispute_resolved", dispute_id)
 payload: DisputeResolvedEvent { dispute_id, subscription_id, resolution,
-         timestamp, schema_version }
+         timestamp, schema_version, resolved_to, token }
 ```
 
 ### Security invariants
@@ -165,18 +171,24 @@ Partial refunds work against the **remaining prepaid balance**:
 - Multiple successive partial refunds are allowed as long as each individual
   `amount <= current prepaid_balance` at the time of the call.
 - A refund equal to the full remaining balance is valid ("full-balance-as-partial").
-- Partial refunds are permitted on subscriptions in **any status**, including
-  `Cancelled`. This supports the common pattern of cancelling first, then issuing
-  a prorated refund of the remaining balance before the subscriber withdraws.
+- Partial refunds operate on `prepaid_balance`. Cancellation zeroes
+  `prepaid_balance` and moves the remaining balance into the time-locked
+  cancellation escrow (see `cancellation.md`), so a `partial_refund` on a
+  `Cancelled` subscription fails with `InsufficientBalance`. Recovery after
+  cancellation is performed through the cancellation escrow, not `partial_refund`.
 
 ### Common flows
 
-#### Cancellation with prorated refund
+#### Cancellation (recovered via the cancellation escrow)
+
+Once `cancel_subscription` runs, `prepaid_balance` is zeroed and the remaining
+balance is held in escrow, so `partial_refund` no longer applies. Recovery is via
+the escrow:
 
 ```
 1. cancel_subscription(subscription_id, subscriber)
-2. partial_refund(admin, subscription_id, subscriber, prorated_amount)
-3. withdraw_subscriber_funds(subscription_id, subscriber)   // withdraw remainder
+2. // after CANCELLATION_ESCROW_WINDOW_SECS (24h) elapses:
+3. claim_cancellation_escrow(subscriber, subscription_id)
 ```
 
 #### Mid-period downgrade
@@ -211,5 +223,5 @@ Partial refunds work against the **remaining prepaid balance**:
 | Repeated refunds are cumulative | `test_partial_refund_repeated_debits_are_cumulative` |
 | Cumulative drain then over-refund fails | `test_partial_refund_cumulative_exact_drain_then_over_refund_fails` |
 | Full balance as partial | `test_partial_refund_full_balance_as_partial_succeeds` |
-| Refund after cancellation | `test_partial_refund_after_cancellation_succeeds` |
+| Refund after cancellation (escrowed) | `test_partial_refund_after_cancellation_rejected_balance_escrowed` |
 | Event emission | `test_partial_refund_emits_event` |

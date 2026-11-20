@@ -415,7 +415,7 @@ fn governance_proposal_bypasses_cooldown() {
             &admin,
             &None::<Address>,
             &0u32,
-            &5000u32, // 50% quorum
+            &6_700u32, // MIN_QUORUM_BPS (67%)
             &eta,
         )
         .unwrap();
@@ -500,7 +500,7 @@ fn event_emitted_on_success() {
             assert_eq!(evt.timestamp, 1000);
             assert_eq!(
                 evt.schema_version,
-                subscription_vault::EVENT_SCHEMA_VERSION
+                subscription_vault::BASE_EVENT_SCHEMA_VERSION
             );
             found = true;
             break;

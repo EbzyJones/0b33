@@ -12,8 +12,8 @@ The following fixtures are located in `contracts/subscription_vault/src/test_ind
 | `fixture_insufficient_balance_grace_period`  | Charge fails due to lack of funds, entering the grace window.             | `subscription_charge_failed` (GracePeriod)         |
 | `fixture_insufficient_balance_terminal`      | Charge fails after grace period expires, entering terminal failed state.  | `subscription_charge_failed` (InsufficientBalance) |
 | `fixture_unauthorized_charge_rejected`       | Attempt to perform an action (e.g., pause) by an unauthorized address.    | (None, returns `Error::Unauthorized`)              |
-| `fixture_refund_on_cancel_with_prepaid`      | Cancellation of a subscription that still has a prepaid balance.          | `subscription_cancelled` (refund_amount > 0)       |
-| `fixture_subscriber_withdrawal_after_cancel` | Subscriber withdraws their remaining balance from a cancelled vault.      | `subscriber_withdrawal`                            |
+| `fixture_refund_on_cancel_with_prepaid`      | Cancellation of a subscription that still has a prepaid balance; the balance is moved into the cancellation escrow. | `subscription_cancelled` (refund_amount > 0), `cancellation_escrow_opened` |
+| `fixture_subscriber_withdrawal_after_cancel` | Subscriber claims the cancellation escrow after the hold window elapses.  | `cancellation_escrow_released`                     |
 | `fixture_merchant_withdrawal`                | Merchant withdraws their earned fees from the contract.                   | `merchant_withdrawal`                              |
 | `fixture_batch_charge_all_success`           | Batch operation where all charges succeed.                                | Multiple `subscription_charged`                    |
 | `fixture_batch_charge_partial_failure`       | Batch operation where some charges succeed and some fail.                 | Mixed success/failure events                       |

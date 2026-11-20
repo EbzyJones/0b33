@@ -8,8 +8,8 @@
 //! - Event emission
 
 use crate::{
-    DataKey, Error, ScheduledPayoutEvent, SubscriptionVault,
-    SubscriptionVaultClient,
+    DataKey, Error, PayoutCheckReason, PayoutScheduleCheckedEvent, ScheduledPayoutEvent,
+    SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
@@ -412,4 +412,90 @@ fn test_get_payout_schedule_default() {
     assert_eq!(schedule.cadence_seconds, 0);
     assert_eq!(schedule.min_payout, 0);
     assert_eq!(schedule.last_payout_at, 0);
+}
+
+// ── payout_schedule_checked event tests ───────────────────────────────────
+//
+// `flush_payouts` must emit a `payout_schedule_checked` event whenever it
+// evaluates the schedule but triggers no token payout, so off-chain monitors
+// can distinguish a successful "no payouts due" call from a failed or dropped
+// transaction.
+
+/// Find the `payout_schedule_checked` event published by the contract, if any.
+fn find_payout_schedule_checked(
+    env: &Env,
+    contract_id: &Address,
+) -> Option<PayoutScheduleCheckedEvent> {
+    let events = env.events().all();
+    events
+        .iter()
+        .find(|(contract, topic, _val)| {
+            *contract == *contract_id
+                && Symbol::from_val(env, &topic.get(0).unwrap())
+                    == Symbol::new(env, "payout_schedule_checked")
+        })
+        .map(|(_, _, val)| val.clone().into_val(env))
+}
+
+#[test]
+fn test_flush_payouts_no_schedule_emits_checked_event() {
+    let (env, client, _admin, _token) = setup_env();
+    let contract_id = client.address.clone();
+    let merchant = Address::generate(&env);
+    let payout = Address::generate(&env);
+    initialize_merchant_config(&client, &merchant, &payout);
+
+    // No schedule configured — flush is a no-op returning 0...
+    let count = client.flush_payouts(&merchant);
+    assert_eq!(count, 0);
+
+    // ...but it must still emit a checked event so monitors see the call ran.
+    let payload = find_payout_schedule_checked(&env, &contract_id)
+        .expect("payout_schedule_checked event not emitted for no-schedule flush");
+    assert_eq!(payload.merchant, merchant);
+    assert_eq!(payload.reason, PayoutCheckReason::NoSchedule);
+    assert_eq!(payload.next_payout_at, 0);
+    assert_eq!(payload.schema_version, crate::types::EVENT_SCHEMA_VERSION);
+}
+
+#[test]
+fn test_flush_payouts_cadence_not_elapsed_emits_checked_event() {
+    let (env, client, _admin, token) = setup_env();
+    let contract_id = client.address.clone();
+    let merchant = Address::generate(&env);
+    let payout = Address::generate(&env);
+    initialize_merchant_config(&client, &merchant, &payout);
+
+    let cadence: u64 = 3600;
+    client.set_payout_schedule(&merchant, &cadence, &0);
+
+    let balance: i128 = 5_000_000;
+    seed_merchant_balance_and_token(&env, &contract_id, &merchant, &token, balance);
+    seed_merchant_earnings(&env, &contract_id, &merchant, &token, balance);
+    token::StellarAssetClient::new(&env, &token).mint(&contract_id, &balance);
+
+    // First flush at T succeeds and stamps `last_payout_at`.
+    let first_ts: u64 = 100_000;
+    env.ledger().set_timestamp(first_ts);
+    assert_eq!(client.flush_payouts(&merchant), 1);
+
+    // No checked event on the successful first flush.
+    assert!(
+        find_payout_schedule_checked(&env, &contract_id).is_none(),
+        "payout_schedule_checked must not be emitted when a payout is triggered"
+    );
+
+    // Second flush within the cadence window is a no-op that returns
+    // IntervalNotElapsed, but must still emit a checked event carrying the
+    // next eligible payout time.
+    env.ledger().set_timestamp(first_ts + 100);
+    let result = client.try_flush_payouts(&merchant);
+    assert_eq!(result, Err(Ok(Error::IntervalNotElapsed)));
+
+    let payload = find_payout_schedule_checked(&env, &contract_id)
+        .expect("payout_schedule_checked event not emitted when cadence pending");
+    assert_eq!(payload.merchant, merchant);
+    assert_eq!(payload.reason, PayoutCheckReason::CadencePending);
+    assert_eq!(payload.next_payout_at, first_ts + cadence);
+    assert_eq!(payload.schema_version, crate::types::EVENT_SCHEMA_VERSION);
 }

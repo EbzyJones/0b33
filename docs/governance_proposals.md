@@ -28,8 +28,8 @@ SUBMITTED → [VOTING PERIOD] → [ETA CHECK] → EXECUTED/CANCELLED
 ```
 
 1. **Submit** (`submit_proposal`): Create a new proposal with:
-   - Type: RotateAdmin, SetProtocolFee, or UpgradeContract
-   - Target parameters (new admin, treasury address, fee_bps)
+  - Type: RotateAdmin, SetProtocolFee, SetDisputeWindow, or UpgradeContract
+  - Target parameters (new admin, treasury address, fee_bps, or dispute-window seconds)
    - Quorum requirement in basis points (0-10000)
    - ETA (execution timestamp threshold)
 
@@ -41,7 +41,8 @@ SUBMITTED → [VOTING PERIOD] → [ETA CHECK] → EXECUTED/CANCELLED
 3. **Execute** (`execute_proposal`):
    - Validates ETA has passed
    - Recalculates quorum considering current (not historical) guardian weights
-   - Requires vote percentage ≥ quorum_bps
+   - Enforces an execution floor of `MIN_QUORUM_BPS = 6700` (67%): the effective quorum is `max(quorum_bps, MIN_QUORUM_BPS)`. Proposals submitted with `quorum_bps < MIN_QUORUM_BPS` therefore use the 67% floor at execution.
+   - Requires yes votes to meet the effective quorum
    - Atomically applies the proposal action and marks as executed
    - Prevents re-execution via immutability flag
 
@@ -83,10 +84,10 @@ pub struct Proposal {
 Submit a new governance proposal.
 
 - **Arguments:**
-  - `kind`: ProposalKind enum (RotateAdmin, SetProtocolFee, UpgradeContract)
+  - `kind`: ProposalKind enum (includes RotateAdmin, SetProtocolFee, SetDisputeWindow, UpgradeContract)
   - `target`: Primary target address (new admin or treasury)
   - `target2`: Optional secondary target
-  - `target3`: Tertiary parameter (0 or fee_bps)
+  - `target3`: Tertiary parameter (fee_bps or dispute-window seconds for `SetDisputeWindow`)
   - `quorum_bps`: Quorum in basis points (0-10000)
   - `eta`: Timestamp after which execution is allowed
 
@@ -117,6 +118,7 @@ Execute a proposal if quorum is met and ETA passed.
 
 - **Arguments:**
   - `proposal_id`: ID of proposal to execute
+- **Quorum enforcement:** Execution uses `max(proposal.quorum_bps, MIN_QUORUM_BPS)`, where `MIN_QUORUM_BPS` is 6700 (67%). A proposal submitted with `quorum_bps < 6700` therefore uses the 6700-bps floor when calculating required yes votes from current total guardian weight.
 
 - **Errors:**
   - `NotFound` if proposal doesn't exist
@@ -322,7 +324,7 @@ client.remove_guardian(admin, guardian2)?;
 The implementation includes 11 core test cases covering:
 
 ✅ Guardian addition and removal
-✅ Proposal submission (RotateAdmin, SetProtocolFee)
+✅ Proposal submission (RotateAdmin, SetProtocolFee, SetDisputeWindow)
 ✅ Invalid quorum and ETA validation
 ✅ Vote casting and updates
 ✅ Proposal execution without quorum

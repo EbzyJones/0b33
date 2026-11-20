@@ -1,5 +1,10 @@
 # Admin Authorization Matrix
 
+> **CI-enforced.** This matrix is validated against `admin.rs` by
+> `scripts/check_admin_matrix.sh`, which parses every `#[contractimpl]`
+> function and fails the build if any entrypoint is missing from the tables
+> below. Run it locally with `./scripts/check_admin_matrix.sh` before pushing.
+
 This document defines the expected authorization behavior for every admin-only
 and operator entrypoint in `subscription_vault`.
 
@@ -18,6 +23,12 @@ and operator entrypoint in `subscription_vault`.
   by a different role model entirely, such as subscriber-or-merchant ownership.
 - Host auth failure (`Error(Auth, InvalidAction)` in tests): no valid signature
   was supplied for a required `require_auth()` check.
+
+The CI check parses `admin.rs` for `#[contractimpl]` functions and asserts that
+every discovered entrypoint appears in one of the tables below. Adding a new
+admin entrypoint without updating this document will fail CI; see the
+**Reviewer Checklist for New Admin Entrypoints** section for the required
+documentation updates.
 
 Admin-only routes return `Unauthorized` for a stale or non-admin signer, or fail at
 the host layer when no signature is present.
@@ -69,7 +80,7 @@ needing the full admin key.
 | Entrypoint | Authorization model | Unauthorized caller | Nonce | Notes |
 | --- | --- | --- | --- | --- |
 | `bulk_pause_subscriptions` | `caller` must equal stored admin **or** operator | `Unauthorized` | Domain 2 (`DOMAIN_OPERATOR_BATCH_CHARGE`), keyed per caller | Partial-failure tolerant; skips already-paused/missing/expired ids; **not** emergency-stop gated (mirrors `pause_subscription`); rejects > `BATCH_MAX_SIZE` ids with `BatchTooLarge`; empty list is a no-op (no nonce, no event) |
-| `bulk_cancel_subscriptions` | `caller` must equal stored admin **or** operator | `Unauthorized` | Domain 2 (`DOMAIN_OPERATOR_BATCH_CHARGE`), keyed per caller | As above, plus refunds each cancelled subscription's prepaid balance; wrapped in a reentrancy guard because the loop performs token transfers; duplicate/already-cancelled ids are skipped so no double refund |
+| `bulk_cancel_subscriptions` | `caller` must equal stored admin **or** operator | `Unauthorized` | Domain 2 (`DOMAIN_OPERATOR_BATCH_CHARGE`), keyed per caller | As above, plus moves each cancelled subscription's remaining prepaid balance into the time-locked cancellation escrow (no token transfer — the funds stay in the vault); wrapped in a reentrancy guard; duplicate/already-cancelled ids are skipped (idempotent) so no double escrow |
 
 Each call returns a `Vec<BulkSubscriptionResult>` — one entry per requested id, in
 request order — and emits one `BulkPauseEvent`/`BulkCancelEvent` envelope plus the
@@ -89,6 +100,14 @@ actually transitioned.
 | --- | --- |
 | `get_operator` | `Option<Address>` — current stored operator, or `None` |
 | `get_operator_nonce(op)` | `u64` — next expected nonce for `operator_batch_charge` |
+
+## Automated matrix validation
+
+The matrix above is checked in CI by `scripts/check_admin_matrix.sh`. The script
+extracts every function defined inside a `#[contractimpl]` block in `admin.rs`
+and verifies that each one is listed in exactly one of the entrypoint tables
+(admin, operator, dual-role, or read-only). Any function present in `admin.rs`
+but absent from this document causes the check to exit non-zero.
 
 ## Operator security notes
 
@@ -156,7 +175,7 @@ All mutating coupon entrypoints are also blocked during an active emergency stop
 | Entrypoint | Authorization model | Wrong-merchant result | Notes |
 |---|---|---|---|
 | `create_coupon` | `merchant` arg signs the transaction (`merchant.require_auth()`); stored as `coupon.merchant` | Host auth failure if unsigned; no further check needed at creation | Code must be globally unique (`CouponAlreadyExists` if duplicate). Emergency-stop gated. |
-| `revoke_coupon` | `merchant` arg signs (`merchant.require_auth()`); then `coupon.merchant != merchant → Unauthorized` | `Unauthorized` | Any address can call with a valid signature, but only the creating merchant passes the ownership check. Already-bound coupons are skipped silently at charge time after revocation. Emergency-stop gated. |
+| `revoke_coupon` | `merchant` arg signs (`merchant.require_auth()`); then `coupon.merchant != merchant → Unauthorized` | `Unauthorized` | Any address can call with a valid signature, but only the creating merchant passes the ownership check. Revocation flips only `Coupon.revoked`; already-bound coupons are skipped silently at charge time afterwards. The per-subscription `SubCoupon` / `SubCouponRedeemed` bindings are intentionally retained as an audit trail (Issue #602) — see `coupon.rs` module docs "Revocation and binding retention". Emergency-stop gated. |
 
 ### Subscriber-owned coupon entrypoints
 
@@ -217,6 +236,7 @@ When adding new admin-only entrypoints, reviewers must verify:
 
 ### ✅ Matrix Documentation
 - [ ] **Entry added to matrix**: New function documented in the matrix table above
+- [ ] **CI check passes**: `./scripts/check_admin_matrix.sh` succeeds locally
 - [ ] **Authorization model correctly described**: Explicit admin parameter vs stored admin loading
 - [ ] **Error behavior documented**: What happens with non-admin callers and stale admin after rotation
 - [ ] **Notes section populated**: Special behaviors, edge cases, or implementation details

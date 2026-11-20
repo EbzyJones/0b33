@@ -42,7 +42,7 @@
 //! | `schedule_cancel` | [`crate::subscription::do_schedule_cancel`] |
 //! | `unschedule_cancel` | [`crate::subscription::do_unschedule_cancel`] |
 //! | `set_auto_renew` | [`crate::subscription::do_set_auto_renew`] |
-//! | `set_subscription_expiration_ledger` | [`crate::subscription::do_set_subscription_expiration_ledger`] |
+//! | `set_subscription_expiry_ledger` | [`crate::subscription::do_set_subscription_expiration_ledger`] |
 //! | `pause_subscription` | [`crate::subscription::do_pause_subscription`] |
 //! | `resume_subscription` | [`crate::subscription::do_resume_subscription`] |
 //! | `cleanup_subscription` | [`crate::subscription::do_cleanup_subscription`] |
@@ -98,6 +98,8 @@
 //! |---|---|
 //! | `set_subscriber_credit_limit` | [`crate::subscription::do_set_subscriber_credit_limit`] |
 //! | `get_subscriber_credit_limit` | [`crate::subscription::get_subscriber_credit_limit`] |
+//! | `list_credit_limits` | [`crate::queries::list_credit_limits`] |
+//! | `list_credit_limits_paginated` | [`crate::queries::list_credit_limits_paginated`] |
 //! | `set_subscriber_active_cap` | [`crate::subscription::do_set_subscriber_active_cap`] |
 //! | `get_subscriber_active_cap` | [`crate::subscription::get_subscriber_active_cap`] |
 //! | `get_subscriber_active_count` | [`crate::subscription::get_subscriber_active_count`] |
@@ -114,10 +116,12 @@
 //! | `get_subscription` | [`crate::queries::get_subscription`] |
 //! | `estimate_topup_for_intervals` | [`crate::queries::estimate_topup_for_intervals`] |
 //! | `get_next_charge_info` | [`crate::queries::get_next_charge_info`] |
+//! | `get_subscriptions_by_subscriber` | [`crate::queries::get_subscriptions_by_subscriber`] |
 //! | `list_subscriptions_by_subscriber` | [`crate::queries::list_subscriptions_by_subscriber`] |
 //! | `get_cap_info` | [`crate::queries::get_cap_info`] |
 //! | `get_token_subscription_count` | [`crate::queries::get_token_subscription_count`] |
 //! | `get_subscriptions_by_token` | [`crate::queries::get_subscriptions_by_token`] |
+//! | `list_subscriptions_by_token` | [`crate::queries::list_subscriptions_by_token`] |
 //!
 //! ## Metadata
 //! | Entrypoint | Delegate |
@@ -155,7 +159,9 @@ pub use crate::metadata::{
 pub use crate::nonce::get_nonce;
 pub use crate::queries::{
     estimate_topup_for_intervals, get_cap_info, get_next_charge_info, get_subscription,
-    get_subscriptions_by_token, get_token_subscription_count, list_subscriptions_by_subscriber,
+    get_subscriptions_by_subscriber, get_subscriptions_by_token, get_token_subscription_count,
+    list_credit_limits, list_credit_limits_paginated, list_subscriptions_by_subscriber,
+    list_subscriptions_by_token,
     get_plan_max_active_subs,
 };
 pub use crate::subscription::{

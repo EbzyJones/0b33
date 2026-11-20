@@ -32,7 +32,7 @@
 
 use crate::oracle_adapter::{dispatch_price, PRICE_SCALE};
 use crate::queries::get_subscription;
-use crate::safe_math::{safe_add, safe_sub, safe_sub_balance};
+use crate::safe_math::{safe_add, safe_mul, safe_sub, safe_sub_balance};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::subscription::{next_charge_time, write_subscription};
@@ -40,9 +40,9 @@ use crate::types::{
     BillingChargeKind, BillingPeriodSnapshot, ChargeExecutionResult, ChargeFailureEvent, DataKey,
     Error, FeeConvertedEvent, GracePeriodEnteredEvent, LifetimeCapReachedEvent,
     SubscriptionAutoPausedEvent, SubscriptionCancelledEvent, SubscriptionChargeFailedEvent,
-    SubscriptionChargedEvent, SubscriptionStatus, TOPIC_CHARGED, UsageChargeRejectedEvent, UsageChargeResult,
+    SubscriptionChargedEvent, SubscriptionStatus, UsageChargeRejectedEvent, UsageChargeResult,
     UsageLimits, UsageState, UsageStatementEvent, SNAPSHOT_FLAG_CLOSED,
-    SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
+    SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED, TOPIC_CHARGED,
 };
 use soroban_sdk::{Address, Env, String, Symbol};
 
@@ -81,7 +81,9 @@ fn charge_fail(
             error_code: err.to_code(),
             attempted_amount,
             ledger,
-            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            batch_nonce: crate::admin::current_batch_nonce(env),
+            schema_version: crate::types::CHARGE_FAILURE_EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
         },
     );
     err
@@ -215,6 +217,36 @@ pub fn charge_one(
     let mut sub = get_subscription(env, subscription_id)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
 
+    // A subscription with amount == 0 must never produce a charge event.
+    // Zero-amount subscriptions yield no-op accounting entries, pollute event
+    // streams with phantom SubscriptionChargedEvents, and consume storage
+    // budget for no value.  Reject immediately after load, before any
+    // merchant/blocklist/status work, so the error is cheap and observable.
+    if sub.amount <= 0 {
+        return Err(charge_fail(
+            env,
+            subscription_id,
+            Error::InvalidAmount,
+            0,
+            now,
+        ));
+    }
+
+    // A zero interval_seconds makes next_charge_time == last_charged_at,
+    // so IntervalNotElapsed never fires and the subscription can be charged
+    // on every ledger, draining the prepaid balance in a single block.
+    // Reject before any next_charge_time call.
+    if sub.interval_seconds == 0 {
+        return Err(charge_fail(
+            env,
+            subscription_id,
+            Error::InvalidInput,
+            0,
+            now,
+        ));
+    }
+
+
     // Merchant pause/vacation status — cached per merchant within a batch so
     // subscriptions sharing a merchant don't each re-read the same storage.
     let (merchant_paused, merchant_in_vacation) = match merchant_cache.as_deref_mut() {
@@ -222,6 +254,9 @@ pub fn charge_one(
             if let Some(cached) = cache.get(sub.merchant.clone()) {
                 cached
             } else {
+                // First read for this merchant in the batch: purge any expired
+                // vacation entry before deciding whether charges are blocked.
+                crate::merchant::flush_expired_vacation(env, &sub.merchant, now);
                 let status = (
                     crate::merchant::get_merchant_paused(env, sub.merchant.clone()),
                     crate::merchant::is_merchant_in_vacation(env, &sub.merchant, now),
@@ -230,10 +265,13 @@ pub fn charge_one(
                 status
             }
         }
-        None => (
-            crate::merchant::get_merchant_paused(env, sub.merchant.clone()),
-            crate::merchant::is_merchant_in_vacation(env, &sub.merchant, now),
-        ),
+        None => {
+            crate::merchant::flush_expired_vacation(env, &sub.merchant, now);
+            (
+                crate::merchant::get_merchant_paused(env, sub.merchant.clone()),
+                crate::merchant::is_merchant_in_vacation(env, &sub.merchant, now),
+            )
+        }
     };
 
     // Merchant pause guard — mirrors charge_usage_one enforcement
@@ -277,6 +315,7 @@ pub fn charge_one(
                     now,
                 ));
             }
+            crate::merchant::flush_expired_vacation(env, &payee, now);
             if crate::merchant::is_merchant_in_vacation(env, &payee, now) {
                 return Err(charge_fail(
                     env,
@@ -299,7 +338,9 @@ pub fn charge_one(
                 crate::types::SubscriptionExpiredEvent {
                     subscription_id,
                     timestamp: now,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    batch_nonce: crate::admin::current_batch_nonce(env),
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
         }
@@ -312,13 +353,56 @@ pub fn charge_one(
         ));
     }
 
+    if let Some(plan_id) = env
+        .storage()
+        .instance()
+        .get::<_, u32>(&DataKey::SubPlan(subscription_id))
+    {
+        let plan = crate::subscription::get_plan_template(env, plan_id)
+            .map_err(|e| charge_fail(env, subscription_id, e, sub.amount, now))?;
+        if plan.is_disabled {
+            return Err(charge_fail(
+                env,
+                subscription_id,
+                Error::PlanDeprecated,
+                sub.amount,
+                now,
+            ));
+        }
+    }
+
     let charge_amount = crate::oracle::resolve_charge_amount(env, subscription_id, &sub)
         .map_err(|e| charge_fail(env, subscription_id, e, 0, now))?;
 
-    // ── Coupon discount (before protocol-fee split) ───────────────────────────
-    // Discount is applied to the oracle-resolved gross amount. The fee split and
-    // merchant credit then operate on `charge_amount` (the post-discount payable).
-    // This preserves: Gross = Discount + Merchant Net + Treasury Fee.
+    // ── Coupon discount (applied to gross, before protocol-fee split) ──────────
+    //
+    // Intended semantics (Issue #475):
+    //
+    // The coupon discount is applied to the **gross** charge amount — the
+    // oracle-resolved amount *before* the protocol fee is deducted. The fee
+    // split and merchant credit then operate on the **post-discount payable**
+    // (`charge_amount`). This ordering is deliberate:
+    //
+    //   gross = 10_000, coupon = 20 %, fee = 5 %
+    //
+    //   Step 1 — discount on gross:   payable = 10_000 * 8_000 / 10_000 = 8_000
+    //   Step 2 — fee on payable:      fee = 8_000 * 500 / 10_000 = 400
+    //                                merchant_net = 8_000 - 400 = 7_600
+    //
+    // If the discount were applied *after* the fee, the merchant would absorb
+    // part of the discount (fee would be computed on 10_000, then the coupon
+    // would reduce the merchant's net share), yielding a different payout:
+    //
+    //   fee = 10_000 * 500 / 10_000 = 500
+    //   merchant_net = (10_000 - 500) * 8_000 / 10_000 = 7_600  (same only by
+    //   coincidence for these numbers; diverges for non-round values)
+    //
+    // The invariant preserved is:
+    //
+    //   Gross = Discount + Merchant Net + Treasury Fee
+    //
+    // See also `coupon::compute_discount` for the percentage-then-fixed
+    // ordering within the discount itself.
     let (mut charge_amount, _discount_amount) = crate::coupon::apply_discount_at_charge(
         env,
         subscription_id,
@@ -332,8 +416,9 @@ pub fn charge_one(
     // scale the charge by the elapsed time within the first interval.
     if sub.proration_enabled && sub.last_payment_timestamp == sub.start_time {
         let elapsed_seconds = now.saturating_sub(sub.start_time);
-        charge_amount = calculate_prorated_first_charge(charge_amount, sub.interval_seconds, elapsed_seconds)
-            .map_err(|e| charge_fail(env, subscription_id, e, charge_amount, now))?;
+        charge_amount =
+            calculate_prorated_first_charge(charge_amount, sub.interval_seconds, elapsed_seconds)
+                .map_err(|e| charge_fail(env, subscription_id, e, charge_amount, now))?;
     }
 
     if let Some(cap) = sub.lifetime_cap {
@@ -348,7 +433,9 @@ pub fn charge_one(
                         lifetime_cap: cap,
                         lifetime_charged: sub.lifetime_charged,
                         timestamp: now,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        batch_nonce: crate::admin::current_batch_nonce(env),
+                        schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
             }
@@ -388,7 +475,9 @@ pub fn charge_one(
                         authorizer: sub.subscriber.clone(),
                         refund_amount,
                         timestamp: now,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        batch_nonce: crate::admin::current_batch_nonce(env),
+                        schema_version: crate::types::SUBSCRIPTION_CANCELLED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
             }
@@ -454,7 +543,11 @@ pub fn charge_one(
     };
 
     let salt_key = DataKey::ChargeSalt(subscription_id);
-    if let Some(last_salt) = env.storage().instance().get::<_, soroban_sdk::BytesN<32>>(&salt_key) {
+    if let Some(last_salt) = env
+        .storage()
+        .instance()
+        .get::<_, soroban_sdk::BytesN<32>>(&salt_key)
+    {
         if last_salt == salt {
             return Err(charge_fail(
                 env,
@@ -507,6 +600,27 @@ pub fn charge_one(
         ));
     }
 
+    // A linked plan must still exist and be active before an interval renewal.
+    // Subscriptions created without a plan template have no SubPlan entry and
+    // continue to use their explicitly configured terms.
+    if let Some(plan_id) = env
+        .storage()
+        .instance()
+        .get::<_, u32>(&DataKey::SubPlan(subscription_id))
+    {
+        let plan = crate::subscription::get_plan_template(env, plan_id)
+            .map_err(|e| charge_fail(env, subscription_id, e, charge_amount, now))?;
+        if plan.is_disabled {
+            return Err(charge_fail(
+                env,
+                subscription_id,
+                Error::NotFound,
+                charge_amount,
+                now,
+            ));
+        }
+    }
+
     // -- Lifetime cap pre-check -----------------------------------------------
     if let Some(cap) = sub.lifetime_cap {
         let remaining = if crate::subscription::lifetime_cap_reached(cap, sub.lifetime_charged) {
@@ -528,7 +642,9 @@ pub fn charge_one(
                     lifetime_cap: cap,
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    batch_nonce: crate::admin::current_batch_nonce(env),
+                    schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
 
@@ -593,11 +709,23 @@ pub fn charge_one(
 
             // Route merchant amount to sub-account if subscription has one
             if let Some(ref label) = sub.sub_account_label {
-                crate::merchant::credit_sub_account(env, &sub.merchant, label, &sub.token, merchant_amount)?;
+                crate::merchant::credit_sub_account(
+                    env,
+                    &sub.merchant,
+                    label,
+                    &sub.token,
+                    merchant_amount,
+                )?;
                 // Deduct from parent balance (parent earnings stay for roll-up reporting)
-                let parent_bal = crate::merchant::get_merchant_balance_by_token(env, &sub.merchant, &sub.token);
+                let parent_bal =
+                    crate::merchant::get_merchant_balance_by_token(env, &sub.merchant, &sub.token);
                 let new_parent_bal = crate::safe_math::safe_sub(parent_bal, merchant_amount)?;
-                crate::merchant::set_merchant_balance(env, &sub.merchant, &sub.token, &new_parent_bal);
+                crate::merchant::set_merchant_balance(
+                    env,
+                    &sub.merchant,
+                    &sub.token,
+                    &new_parent_bal,
+                );
             }
 
             let conversion = if fee_amount > 0 {
@@ -606,7 +734,7 @@ pub fn charge_one(
                     &sub.merchant,
                     &sub.token,
                     fee_amount,
-                    price_cache.as_deref_mut(),
+                    None,
                 ))
             } else {
                 None
@@ -681,7 +809,9 @@ pub fn charge_one(
                         fee_amount: fee,
                         treasury,
                         timestamp: now,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        batch_nonce: crate::admin::current_batch_nonce(env),
+                        schema_version: crate::types::PROTOCOL_FEE_CHARGED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
                 // Emit fee conversion event when fee-token override was applied
@@ -697,7 +827,9 @@ pub fn charge_one(
                                 converted_fee_amount: conv.effective_amount,
                                 rate: conv.rate,
                                 timestamp: now,
-                                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                                batch_nonce: crate::admin::current_batch_nonce(env),
+                                schema_version: crate::types::FEE_CONVERTED_EVENT_SCHEMA_VERSION,
+                                contract_id: env.current_contract_address(),
                             },
                         );
                     }
@@ -739,7 +871,7 @@ pub fn charge_one(
                     subscription_id,
                     &k,
                 );
-                crate::idempotency::push_key(env, subscription_id, &hashed, now);
+                crate::idempotency::push_key(env, subscription_id, &hashed, now)?;
             }
 
             env.events().publish(
@@ -755,7 +887,10 @@ pub fn charge_one(
                     period_start,
                     period_end,
                     salt: salt.clone(),
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    batch_nonce: crate::admin::current_batch_nonce(env),
+                    schema_version: crate::types::SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
+                    prepaid_balance: sub.prepaid_balance,
                 },
             );
 
@@ -768,7 +903,9 @@ pub fn charge_one(
                             lifetime_cap: cap,
                             lifetime_charged: sub.lifetime_charged,
                             timestamp: now,
-                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                            batch_nonce: crate::admin::current_batch_nonce(env),
+                            schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                            contract_id: env.current_contract_address(),
                         },
                     );
                 }
@@ -793,7 +930,6 @@ pub fn charge_one(
                     if grace_duration == 0 || now >= grace_expires {
                         // Grace window closed — move to InsufficientBalance
                         transition_to(&mut sub.status, SubscriptionStatus::InsufficientBalance)?;
-                        sub.grace_start_timestamp = None;
                     }
                     // else: stay in GracePeriod, keep clock unchanged
                 } else {
@@ -823,7 +959,9 @@ pub fn charge_one(
                         previous_status,
                         grace_expires_at,
                         timestamp: now,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        batch_nonce: crate::admin::current_batch_nonce(env),
+                        schema_version: crate::types::GRACE_PERIOD_ENTERED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
             }
@@ -839,7 +977,9 @@ pub fn charge_one(
                     shortfall,
                     resulting_status: sub.status,
                     timestamp: now,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    batch_nonce: crate::admin::current_batch_nonce(env),
+                    schema_version: crate::types::SUBSCRIPTION_CHARGE_FAILED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
 
@@ -861,8 +1001,7 @@ pub fn charge_one(
 
                 if failures >= threshold {
                     // Re-load subscription to apply the Paused transition cleanly.
-                    let mut sub2 =
-                        crate::queries::get_subscription(env, subscription_id).unwrap();
+                    let mut sub2 = crate::queries::get_subscription(env, subscription_id).unwrap();
                     if sub2.status == SubscriptionStatus::InsufficientBalance {
                         if transition_to(&mut sub2.status, SubscriptionStatus::Paused).is_ok() {
                             crate::subscription::write_subscription(env, subscription_id, &sub2);
@@ -874,7 +1013,9 @@ pub fn charge_one(
                                     consecutive_failures: failures,
                                     threshold,
                                     timestamp: now,
-                                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                                    batch_nonce: crate::admin::current_batch_nonce(env),
+                                    schema_version: crate::types::SUBSCRIPTION_AUTO_PAUSED_EVENT_SCHEMA_VERSION,
+                                    contract_id: env.current_contract_address(),
                                 },
                             );
                         }
@@ -922,8 +1063,10 @@ pub fn charge_usage_one(
         ));
     }
 
-    // Merchant vacation guard — block charges during vacation window
+    // Merchant vacation guard — block charges during vacation window.
+    // Purge any expired vacation entry on the first charge after its end_ts.
     let now = env.ledger().timestamp();
+    crate::merchant::flush_expired_vacation(env, &merchant, now);
     if crate::merchant::is_merchant_in_vacation(env, &merchant, now) {
         return Err(charge_fail(
             env,
@@ -953,6 +1096,7 @@ pub fn charge_usage_one(
                     env.ledger().timestamp(),
                 ));
             }
+            crate::merchant::flush_expired_vacation(env, &payee, now);
             if crate::merchant::is_merchant_in_vacation(env, &payee, now) {
                 return Err(charge_fail(
                     env,
@@ -975,7 +1119,9 @@ pub fn charge_usage_one(
                 crate::types::SubscriptionExpiredEvent {
                     subscription_id,
                     timestamp: now,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    batch_nonce: crate::admin::current_batch_nonce(env),
+                    schema_version: crate::types::SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
         }
@@ -1000,7 +1146,9 @@ pub fn charge_usage_one(
                         lifetime_cap: cap,
                         lifetime_charged: sub.lifetime_charged,
                         timestamp: now,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        batch_nonce: crate::admin::current_batch_nonce(env),
+                        schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
             }
@@ -1034,6 +1182,19 @@ pub fn charge_usage_one(
         ));
     }
 
+    if !sub.auto_renew {
+        let next_allowed = next_charge_time(sub.last_payment_timestamp, sub.interval_seconds)?;
+        if now >= next_allowed {
+            return Err(charge_fail(
+                env,
+                subscription_id,
+                Error::NotActive,
+                usage_amount,
+                now,
+            ));
+        }
+    }
+
     if usage_amount <= 0 {
         return Err(charge_fail(
             env,
@@ -1042,6 +1203,29 @@ pub fn charge_usage_one(
             usage_amount,
             now,
         ));
+    }
+
+    let usage_cap_override: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::UsageChargeCapOverride(merchant.clone()))
+        .unwrap_or(false);
+    if !usage_cap_override && usage_amount > sub.amount {
+        env.events().publish(
+            (Symbol::new(env, "usage_charge_rejected"), subscription_id),
+            UsageChargeRejectedEvent {
+                subscription_id,
+                merchant: sub.merchant.clone(),
+                token: sub.token.clone(),
+                usage_amount,
+                timestamp: now,
+                reference,
+                result: UsageChargeResult::UsageCapExceeded,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
+            },
+        );
+        return Ok(UsageChargeResult::UsageCapExceeded);
     }
 
     if sub.prepaid_balance < usage_amount {
@@ -1074,7 +1258,8 @@ pub fn charge_usage_one(
                 timestamp: now,
                 reference,
                 result: UsageChargeResult::Replay,
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
         return Ok(UsageChargeResult::Replay);
@@ -1099,7 +1284,7 @@ pub fn charge_usage_one(
                 period_index: now.saturating_sub(sub.start_time) / sub.interval_seconds,
             });
 
-        // 1. Burst protection
+        // A zero interval explicitly disables burst protection.
         if limits.burst_min_interval_secs > 0 {
             let elapsed = now.saturating_sub(state.last_usage_timestamp);
             if elapsed < limits.burst_min_interval_secs {
@@ -1113,7 +1298,8 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::BurstLimitExceeded,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
                 return Ok(UsageChargeResult::BurstLimitExceeded);
@@ -1141,7 +1327,8 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::RateLimitExceeded,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
                 return Ok(UsageChargeResult::RateLimitExceeded);
@@ -1152,8 +1339,26 @@ pub fn charge_usage_one(
         if let Some(cap_units) = limits.usage_cap_units {
             let current_period = now.saturating_sub(sub.start_time) / sub.interval_seconds;
             if current_period > state.period_index {
+                let previous_period_index = state.period_index;
+                let previous_period_usage_units = state.current_period_usage_units;
                 state.period_index = current_period;
                 state.current_period_usage_units = 0;
+                env.storage().instance().set(&state_key, &state);
+                env.events().publish(
+                    (Symbol::new(env, "usage_cap_reset"), subscription_id),
+                    UsageCapResetEvent {
+                        subscription_id,
+                        merchant: sub.merchant.clone(),
+                        token: sub.token.clone(),
+                        previous_period_index,
+                        current_period_index: current_period,
+                        previous_period_usage_units,
+                        usage_cap_units: cap_units,
+                        timestamp: now,
+                        schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
+                    },
+                );
             }
             if state
                 .current_period_usage_units
@@ -1170,7 +1375,8 @@ pub fn charge_usage_one(
                         timestamp: now,
                         reference,
                         result: UsageChargeResult::UsageCapExceeded,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
                 return Ok(UsageChargeResult::UsageCapExceeded);
@@ -1200,7 +1406,9 @@ pub fn charge_usage_one(
                     lifetime_cap: cap,
                     lifetime_charged: sub.lifetime_charged,
                     timestamp: now,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    batch_nonce: crate::admin::current_batch_nonce(env),
+                    schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
             return Ok(UsageChargeResult::Charged);
@@ -1214,10 +1422,8 @@ pub fn charge_usage_one(
             let treasury_opt = crate::admin::get_treasury(env);
             let (merchant_amount, fee_amount) = if fee_bps > 0 {
                 if let Some(ref _t) = treasury_opt {
-                    // Minimum-fee floor: see charge_one for rationale.
-                    let fee = (usage_amount * fee_bps as i128 / 10_000i128).max(1);
-                    let net = safe_sub(usage_amount, fee)?;
-                    (net, fee)
+                    let fee = safe_mul(usage_amount, fee_bps as i128)? / 10_000i128;
+                    (usage_amount - fee, fee)
                 } else {
                     (usage_amount, 0i128)
                 }
@@ -1234,15 +1440,33 @@ pub fn charge_usage_one(
 
             // Route merchant amount to sub-account if subscription has one
             if let Some(ref label) = sub.sub_account_label {
-                crate::merchant::credit_sub_account(env, &sub.merchant, label, &sub.token, merchant_amount)?;
+                crate::merchant::credit_sub_account(
+                    env,
+                    &sub.merchant,
+                    label,
+                    &sub.token,
+                    merchant_amount,
+                )?;
                 // Deduct from parent balance (parent earnings stay for roll-up reporting)
-                let parent_bal = crate::merchant::get_merchant_balance_by_token(env, &sub.merchant, &sub.token);
+                let parent_bal =
+                    crate::merchant::get_merchant_balance_by_token(env, &sub.merchant, &sub.token);
                 let new_parent_bal = crate::safe_math::safe_sub(parent_bal, merchant_amount)?;
-                crate::merchant::set_merchant_balance(env, &sub.merchant, &sub.token, &new_parent_bal);
+                crate::merchant::set_merchant_balance(
+                    env,
+                    &sub.merchant,
+                    &sub.token,
+                    &new_parent_bal,
+                );
             }
 
             let conversion = if fee_amount > 0 {
-                Some(convert_fee(env, &sub.merchant, &sub.token, fee_amount, None))
+                Some(convert_fee(
+                    env,
+                    &sub.merchant,
+                    &sub.token,
+                    fee_amount,
+                    None,
+                ))
             } else {
                 None
             };
@@ -1302,7 +1526,9 @@ pub fn charge_usage_one(
                         fee_amount: fee,
                         treasury,
                         timestamp: now,
-                        schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                        batch_nonce: crate::admin::current_batch_nonce(env),
+                        schema_version: crate::types::PROTOCOL_FEE_CHARGED_EVENT_SCHEMA_VERSION,
+                        contract_id: env.current_contract_address(),
                     },
                 );
                 // Emit fee conversion event when fee-token override was applied
@@ -1318,7 +1544,9 @@ pub fn charge_usage_one(
                                 converted_fee_amount: conv.effective_amount,
                                 rate: conv.rate,
                                 timestamp: now,
-                                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                                batch_nonce: crate::admin::current_batch_nonce(env),
+                                schema_version: crate::types::FEE_CONVERTED_EVENT_SCHEMA_VERSION,
+                                contract_id: env.current_contract_address(),
                             },
                         );
                     }
@@ -1371,7 +1599,8 @@ pub fn charge_usage_one(
                     token: sub.token.clone(),
                     timestamp: now,
                     reference,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    schema_version: crate::types::BASE_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
 
@@ -1384,7 +1613,9 @@ pub fn charge_usage_one(
                             lifetime_cap: cap,
                             lifetime_charged: sub.lifetime_charged,
                             timestamp: now,
-                            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                            batch_nonce: crate::admin::current_batch_nonce(env),
+                            schema_version: crate::types::LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION,
+                            contract_id: env.current_contract_address(),
                         },
                     );
                 }
@@ -1405,7 +1636,9 @@ pub fn charge_usage_one(
                     shortfall: usage_amount.saturating_sub(sub.prepaid_balance),
                     resulting_status: SubscriptionStatus::InsufficientBalance,
                     timestamp: now,
-                    schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                    batch_nonce: crate::admin::current_batch_nonce(env),
+                    schema_version: crate::types::SUBSCRIPTION_CHARGE_FAILED_EVENT_SCHEMA_VERSION,
+                    contract_id: env.current_contract_address(),
                 },
             );
             Ok(UsageChargeResult::Charged)
@@ -1431,12 +1664,13 @@ pub(crate) fn credit_charge_payees(
     if let Some(split_payees) = crate::subscription::get_split_payees(env, subscription_id) {
         let mut total_distributed_amount = 0i128;
         let num_payees = split_payees.entries.len();
-        
+
         for i in 1..num_payees {
             if let Some(entry) = split_payees.entries.get(i) {
                 let (payee, weight) = entry;
                 let share = net_merchant_amount * weight as i128 / 10_000i128;
-                total_distributed_amount = crate::safe_math::safe_add(total_distributed_amount, share)?;
+                total_distributed_amount =
+                    crate::safe_math::safe_add(total_distributed_amount, share)?;
                 crate::merchant::credit_merchant_balance_for_token(
                     env,
                     &payee,
@@ -1446,7 +1680,7 @@ pub(crate) fn credit_charge_payees(
                 )?;
             }
         }
-        
+
         if let Some(entry) = split_payees.entries.get(0) {
             let (payee, _) = entry;
             let first_share = net_merchant_amount - total_distributed_amount;
@@ -1458,7 +1692,7 @@ pub(crate) fn credit_charge_payees(
                 charge_kind,
             )?;
         }
-        
+
         let mut payees_vec = soroban_sdk::Vec::new(env);
         for i in 0..num_payees {
             if let Some(entry) = split_payees.entries.get(i) {
@@ -1471,14 +1705,19 @@ pub(crate) fn credit_charge_payees(
                 payees_vec.push_back((payee, share));
             }
         }
-        
+
         env.events().publish(
-            (soroban_sdk::Symbol::new(env, "split_charge"), subscription_id),
+            (
+                soroban_sdk::Symbol::new(env, "split_charge"),
+                subscription_id,
+            ),
             crate::types::SplitChargeEvent {
                 subscription_id,
                 payees: payees_vec,
                 timestamp: env.ledger().timestamp(),
-                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                batch_nonce: crate::admin::current_batch_nonce(env),
+                schema_version: crate::types::SPLIT_CHARGE_EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
     } else {
@@ -1522,53 +1761,41 @@ pub fn calculate_prorated_first_charge(
     if amount < 0 {
         return Err(Error::InvalidAmount);
     }
-    
+
     if interval == 0 {
         return Err(Error::InvalidInput);
     }
-    
+
     // Handle edge case: if remaining_seconds is 0, no charge
     if remaining_seconds == 0 {
         return Ok(0);
     }
-    
+
     // Cap remaining_seconds to interval to avoid overflow
     // If remaining >= interval, we charge the full amount
     if remaining_seconds >= interval {
         return Ok(amount);
     }
-    
-    // Compute (amount * remaining_seconds) / interval safely
-    // Strategy: Check if we can do the multiplication in i128 first
-    // If not, use u128 for intermediate calculation
-    
-    // First try direct i128 multiplication to be efficient for small values
-    match amount.checked_mul(remaining_seconds as i128) {
-        Some(product) => {
-            // Multiplication succeeded, safe to divide
-            let prorated = product / interval as i128;
-            Ok(prorated.min(amount))
-        }
-        None => {
-            // Multiplication would overflow i128
-            // Use u128 for intermediate calculation
-            // amount is i128, convert to u128 (it's non-negative)
-            let amount_u128 = amount as u128;
-            let remaining_u128 = remaining_seconds as u128;
-            let interval_u128 = interval as u128;
-            
-            let product_u128 = amount_u128
-                .checked_mul(remaining_u128)
-                .ok_or(Error::InvalidAmount)?;
-            
-            let prorated_u128 = product_u128 / interval_u128;
-            
-            // Convert back to i128 (should not overflow since result <= amount < i128::MAX)
-            if prorated_u128 > i128::MAX as u128 {
-                Err(Error::InvalidAmount)
-            } else {
-                Ok((prorated_u128 as i128).min(amount))
-            }
-        }
-    }
+
+    // Split amount into quotient and remainder so neither intermediate product
+    // scales with the full i128 amount:
+    // (amount * remaining) / interval
+    // = (amount / interval) * remaining
+    //   + ((amount % interval) * remaining) / interval.
+    let interval_i128 = interval as i128;
+    let remaining_i128 = remaining_seconds as i128;
+    let whole_product = (amount / interval_i128)
+        .checked_mul(remaining_i128)
+        .ok_or(Error::Overflow)?;
+
+    // Both factors are less than interval (a u64), so this product fits u128.
+    let fractional_product = ((amount % interval_i128) as u128)
+        .checked_mul(remaining_seconds as u128)
+        .ok_or(Error::Overflow)?;
+    let fractional = (fractional_product / interval as u128) as i128;
+
+    let prorated = whole_product
+        .checked_add(fractional)
+        .ok_or(Error::Overflow)?;
+    Ok(prorated.min(amount))
 }

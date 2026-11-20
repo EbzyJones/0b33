@@ -151,16 +151,22 @@ mod abi_hash_regression {
             actual, GOLDEN_ABI_HASH,
             "\n\
             ABI entry-point hash changed!\n\
-            Expected : {}\n\
-            Got      : {}\n\
+            \n\
+            Old (expected) : {old}\n\
+            New (got)      : {new}\n\
+            \n\
+            To update the golden value, replace GOLDEN_ABI_HASH with:\n\
+            \n\
+                \"{new}\"\n\
             \n\
             This means a `pub fn` was added, removed, or renamed in the\n\
             `#[contractimpl]` block of lib.rs.  If this is intentional:\n\
-            1. Update GOLDEN_ABI_HASH in tests/abi_hash_regression.rs.\n\
+            1. Paste the new hash above into GOLDEN_ABI_HASH in\n\
+               tests/abi_hash_regression.rs.\n\
             2. Add a comment explaining what changed and why.\n\
             3. Confirm existing clients / SDKs are updated.\n",
-            GOLDEN_ABI_HASH,
-            actual,
+            old = GOLDEN_ABI_HASH,
+            new = actual,
         );
     }
 
@@ -258,6 +264,7 @@ mod abi_hash_regression {
             "cancel_admin_proposal",
             "set_operator",
             "batch_charge",
+            "batch_charge_detailed",
             "enable_emergency_stop",
             "disable_emergency_stop",
             "set_protocol_fee",
@@ -275,6 +282,26 @@ mod abi_hash_regression {
             assert!(
                 names.contains(*name),
                 "Admin entrypoint `{}` missing from ABI — was it renamed or removed?",
+                name
+            );
+        }
+
+        // ── Query group ───────────────────────────────────────────────────────
+        let query_required = [
+            "list_subscriptions_by_token",
+            // Cursor-paginated variants added for issue #599 (bounded query
+            // entrypoints).  The unbounded originals are retained above/below
+            // for backwards compatibility; these additive names implement the
+            // instruction-budget guards.
+            "list_credit_limits_paginated",
+            "get_token_reconciliation_paginated",
+            "generate_reconciliation_proof_paginated",
+            "get_contract_reconciliation_summary_paginated",
+        ];
+        for name in &query_required {
+            assert!(
+                names.contains(*name),
+                "Query entrypoint `{}` missing from ABI — was it renamed or removed?",
                 name
             );
         }

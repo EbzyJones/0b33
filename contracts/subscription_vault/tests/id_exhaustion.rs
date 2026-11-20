@@ -1,25 +1,27 @@
 //! ID-space exhaustion boundary tests.
 //!
-//! Seeds `DataKey::NextId` to `u32::MAX - 1` via `env.as_contract` so that
-//! exactly one more allocation succeeds, then asserts that every subsequent
-//! call returns the correct limit error without wrapping the counter.
+//! Seeds `DataKey::NextId` to `MAX_TOTAL_SUBSCRIPTIONS - 1` via `env.as_contract`
+//! so that exactly one more allocation succeeds, then asserts that every
+//! subsequent call returns the correct limit error without wrapping the counter.
 //!
 //! # Errors under test
 //!
-//! | Entry-point | Error at u32::MAX |
+//! | Entry-point | Error at `MAX_TOTAL_SUBSCRIPTIONS` |
 //! |---|---|
 //! | `create_subscription` | `SubscriptionLimitReached` (#6001) |
 //! | `create_subscription_with_token` | `SubscriptionLimitReached` (#6001) |
-//! | `create_subscription_from_plan` | `Overflow` (#1) — no `MAX_SUBSCRIPTION_ID` guard in `do_create_subscription_from_plan` |
+//! | `create_subscription_from_plan` | `SubscriptionLimitReached` (#6001) |
 //!
-//! The `from_plan` discrepancy is intentional documentation: the test pins the
-//! current behaviour so a future fix (aligning it to `SubscriptionLimitReached`)
-//! will cause a deliberate test failure rather than a silent regression.
+//! All three creation paths enforce the global ceiling `MAX_TOTAL_SUBSCRIPTIONS`
+//! and return `SubscriptionLimitReached` once the counter reaches it; the
+//! counter is left unchanged on the failing call.
 
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, Address, Env};
-use subscription_vault::{DataKey, Error, SubscriptionVault, SubscriptionVaultClient};
+use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
+use subscription_vault::{
+    DataKey, Error, SubscriptionVault, SubscriptionVaultClient, MAX_TOTAL_SUBSCRIPTIONS,
+};
 
 // ── shared constants ──────────────────────────────────────────────────────────
 
@@ -70,11 +72,12 @@ fn read_next_id(env: &Env, contract: &Address) -> u32 {
 
 // ── create_subscription ───────────────────────────────────────────────────────
 
-/// At `u32::MAX - 1` exactly one allocation succeeds and returns id `u32::MAX - 1`.
+/// At `MAX_TOTAL_SUBSCRIPTIONS - 1` exactly one allocation succeeds and returns
+/// id `MAX_TOTAL_SUBSCRIPTIONS - 1`.
 #[test]
 fn create_subscription_last_id_succeeds() {
     let (env, client, _) = setup();
-    seed_next_id(&env, &client.address, u32::MAX - 1);
+    seed_next_id(&env, &client.address, MAX_TOTAL_SUBSCRIPTIONS - 1);
 
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -88,21 +91,27 @@ fn create_subscription_last_id_succeeds() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-);
+        &None::<Symbol>,
+    );
 
-    assert_eq!(id, u32::MAX - 1, "last valid id must be u32::MAX - 1");
+    assert_eq!(
+        id,
+        MAX_TOTAL_SUBSCRIPTIONS - 1,
+        "last valid id must be MAX_TOTAL_SUBSCRIPTIONS - 1"
+    );
     assert_eq!(
         read_next_id(&env, &client.address),
-        u32::MAX,
-        "counter must advance to u32::MAX after final allocation"
+        MAX_TOTAL_SUBSCRIPTIONS,
+        "counter must advance to MAX_TOTAL_SUBSCRIPTIONS after final allocation"
     );
 }
 
-/// After the counter reaches `u32::MAX`, `create_subscription` returns `SubscriptionLimitReached`.
+/// After the counter reaches `MAX_TOTAL_SUBSCRIPTIONS`, `create_subscription`
+/// returns `SubscriptionLimitReached`.
 #[test]
 fn create_subscription_at_max_returns_limit_reached() {
     let (env, client, _) = setup();
-    seed_next_id(&env, &client.address, u32::MAX);
+    seed_next_id(&env, &client.address, MAX_TOTAL_SUBSCRIPTIONS);
 
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -116,9 +125,10 @@ fn create_subscription_at_max_returns_limit_reached() {
             &false,
             &None::<i128>,
             &None::<u64>,
-            &None::<Address>,
+            &None::<u32>,
+            &None::<Symbol>,
         )
-        .expect_err("must fail when counter is at u32::MAX");
+        .expect_err("must fail when counter is at MAX_TOTAL_SUBSCRIPTIONS");
 
     assert_eq!(err, Ok(Error::SubscriptionLimitReached));
 }
@@ -127,7 +137,7 @@ fn create_subscription_at_max_returns_limit_reached() {
 #[test]
 fn create_subscription_counter_unchanged_after_failure() {
     let (env, client, _) = setup();
-    seed_next_id(&env, &client.address, u32::MAX);
+    seed_next_id(&env, &client.address, MAX_TOTAL_SUBSCRIPTIONS);
 
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -141,22 +151,23 @@ fn create_subscription_counter_unchanged_after_failure() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-);
+        &None::<Symbol>,
+    );
 
     assert_eq!(
         read_next_id(&env, &client.address),
-        u32::MAX,
-        "counter must stay at u32::MAX after failed allocation"
+        MAX_TOTAL_SUBSCRIPTIONS,
+        "counter must stay at MAX_TOTAL_SUBSCRIPTIONS after failed allocation"
     );
 }
 
 // ── create_subscription_with_token ───────────────────────────────────────────
 
-/// At `u32::MAX - 1` exactly one allocation succeeds via the token-specific path.
+/// At `MAX_TOTAL_SUBSCRIPTIONS - 1` exactly one allocation succeeds via the token-specific path.
 #[test]
 fn create_subscription_with_token_last_id_succeeds() {
     let (env, client, token) = setup();
-    seed_next_id(&env, &client.address, u32::MAX - 1);
+    seed_next_id(&env, &client.address, MAX_TOTAL_SUBSCRIPTIONS - 1);
 
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -171,17 +182,22 @@ fn create_subscription_with_token_last_id_succeeds() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-);
+        &None::<Symbol>,
+    );
 
-    assert_eq!(id, u32::MAX - 1);
-    assert_eq!(read_next_id(&env, &client.address), u32::MAX);
+    assert_eq!(id, MAX_TOTAL_SUBSCRIPTIONS - 1);
+    assert_eq!(
+        read_next_id(&env, &client.address),
+        MAX_TOTAL_SUBSCRIPTIONS
+    );
 }
 
-/// After the counter reaches `u32::MAX`, `create_subscription_with_token` returns `SubscriptionLimitReached`.
+/// After the counter reaches `MAX_TOTAL_SUBSCRIPTIONS`, `create_subscription_with_token`
+/// returns `SubscriptionLimitReached`.
 #[test]
 fn create_subscription_with_token_at_max_returns_limit_reached() {
     let (env, client, token) = setup();
-    seed_next_id(&env, &client.address, u32::MAX);
+    seed_next_id(&env, &client.address, MAX_TOTAL_SUBSCRIPTIONS);
 
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -196,8 +212,10 @@ fn create_subscription_with_token_at_max_returns_limit_reached() {
             &false,
             &None::<i128>,
             &None::<u64>,
+            &None::<u32>,
+            &None::<Symbol>,
         )
-        .expect_err("must fail when counter is at u32::MAX");
+        .expect_err("must fail when counter is at MAX_TOTAL_SUBSCRIPTIONS");
 
     assert_eq!(err, Ok(Error::SubscriptionLimitReached));
 }
@@ -206,7 +224,7 @@ fn create_subscription_with_token_at_max_returns_limit_reached() {
 #[test]
 fn create_subscription_with_token_counter_unchanged_after_failure() {
     let (env, client, token) = setup();
-    seed_next_id(&env, &client.address, u32::MAX);
+    seed_next_id(&env, &client.address, MAX_TOTAL_SUBSCRIPTIONS);
 
     let subscriber = Address::generate(&env);
     let merchant = Address::generate(&env);
@@ -221,14 +239,18 @@ fn create_subscription_with_token_counter_unchanged_after_failure() {
         &None::<i128>,
         &None::<u64>,
         &None::<u32>,
-);
+        &None::<Symbol>,
+    );
 
-    assert_eq!(read_next_id(&env, &client.address), u32::MAX);
+    assert_eq!(
+        read_next_id(&env, &client.address),
+        MAX_TOTAL_SUBSCRIPTIONS
+    );
 }
 
 // ── create_subscription_from_plan ────────────────────────────────────────────
 
-/// At `u32::MAX - 1` exactly one allocation succeeds via the plan path.
+/// At `MAX_TOTAL_SUBSCRIPTIONS - 1` exactly one allocation succeeds via the plan path.
 #[test]
 fn create_subscription_from_plan_last_id_succeeds() {
     let (env, client, _) = setup();
@@ -236,36 +258,37 @@ fn create_subscription_from_plan_last_id_succeeds() {
     let merchant = Address::generate(&env);
     let plan_id = client.create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
 
-    seed_next_id(&env, &client.address, u32::MAX - 1);
+    seed_next_id(&env, &client.address, MAX_TOTAL_SUBSCRIPTIONS - 1);
 
     let subscriber = Address::generate(&env);
-    let id = client.create_subscription_from_plan(&subscriber, &plan_id);
+    let id = client.create_subscription_from_plan(&subscriber, &plan_id, &None::<Symbol>);
 
-    assert_eq!(id, u32::MAX - 1);
-    assert_eq!(read_next_id(&env, &client.address), u32::MAX);
+    assert_eq!(id, MAX_TOTAL_SUBSCRIPTIONS - 1);
+    assert_eq!(
+        read_next_id(&env, &client.address),
+        MAX_TOTAL_SUBSCRIPTIONS
+    );
 }
 
-/// After the counter reaches `u32::MAX`, `create_subscription_from_plan` returns `Overflow`
-/// (not `SubscriptionLimitReached`) because `do_create_subscription_from_plan` uses
-/// `checked_add(1).ok_or(Error::Overflow)` without a `MAX_SUBSCRIPTION_ID` guard.
-///
-/// This test pins the current behaviour. If the implementation is aligned to return
-/// `SubscriptionLimitReached` in the future, update this assertion accordingly.
+/// After the counter reaches `MAX_TOTAL_SUBSCRIPTIONS`, `create_subscription_from_plan`
+/// returns `SubscriptionLimitReached` (#6001), the same as the other creation paths,
+/// because `do_create_subscription_from_plan` now enforces the `MAX_TOTAL_SUBSCRIPTIONS`
+/// ceiling before allocating an ID.
 #[test]
-fn create_subscription_from_plan_at_max_returns_overflow() {
+fn create_subscription_from_plan_at_max_returns_limit_reached() {
     let (env, client, _) = setup();
 
     let merchant = Address::generate(&env);
     let plan_id = client.create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
 
-    seed_next_id(&env, &client.address, u32::MAX);
+    seed_next_id(&env, &client.address, MAX_TOTAL_SUBSCRIPTIONS);
 
     let subscriber = Address::generate(&env);
     let err = client
-        .try_create_subscription_from_plan(&subscriber, &plan_id)
-        .expect_err("must fail when counter is at u32::MAX");
+        .try_create_subscription_from_plan(&subscriber, &plan_id, &None::<Symbol>)
+        .expect_err("must fail when counter is at MAX_TOTAL_SUBSCRIPTIONS");
 
-    assert_eq!(err, Ok(Error::Overflow));
+    assert_eq!(err, Ok(Error::SubscriptionLimitReached));
 }
 
 /// Counter must not change after a failed `create_subscription_from_plan`.
@@ -276,10 +299,13 @@ fn create_subscription_from_plan_counter_unchanged_after_failure() {
     let merchant = Address::generate(&env);
     let plan_id = client.create_plan_template(&merchant, &AMOUNT, &INTERVAL, &false, &None::<i128>);
 
-    seed_next_id(&env, &client.address, u32::MAX);
+    seed_next_id(&env, &client.address, MAX_TOTAL_SUBSCRIPTIONS);
 
     let subscriber = Address::generate(&env);
-    let _ = client.try_create_subscription_from_plan(&subscriber, &plan_id);
+    let _ = client.try_create_subscription_from_plan(&subscriber, &plan_id, &None::<Symbol>);
 
-    assert_eq!(read_next_id(&env, &client.address), u32::MAX);
+    assert_eq!(
+        read_next_id(&env, &client.address),
+        MAX_TOTAL_SUBSCRIPTIONS
+    );
 }
