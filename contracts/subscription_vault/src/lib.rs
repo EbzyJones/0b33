@@ -69,6 +69,8 @@ mod test_sub_account_fee_propagation;
 mod test_get_subscription_deserialization;
 mod types;
 mod validation;
+#[cfg(test)]
+mod test_auto_pause;
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use validation::MAX_SUBSCRIPTION_AMOUNT;
