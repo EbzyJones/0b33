@@ -321,3 +321,8 @@ We expect all contributors and maintainers to be respectful and inclusive. By pa
 ## License
 
 See the [LICENSE](LICENSE) file in this repository (add one if not present). Contributions are accepted under the same license.
+
+## Handsoff notes
+
+<!-- handsoff-issue-530 -->
+- #530: [#394] deposit_funds does not enforce MIN_TOPUP per individual deposit call
