@@ -328,6 +328,10 @@ fn test_recovery_exact_surplus_leaves_accounted_funds_intact() {
     // contract ends at exactly zero.
     client.withdraw_merchant_funds(&merchant, &10_000_000);
     client.cancel_subscription(&sub_id, &subscriber);
+    // Cancel escrows the unspent balance (#604); advance past the escrow window
+    // so the withdrawal releases it.
+    env.ledger()
+        .with_mut(|l| l.timestamp += crate::CANCELLATION_ESCROW_WINDOW_SECS + 1);
     client.withdraw_subscriber_funds(&sub_id, &subscriber);
 
     assert_eq!(balance_client.balance(&subscriber), 40_000_000, "subscriber must receive the unspent prepaid balance");
@@ -451,6 +455,9 @@ fn test_state_consistency() {
 
     // 5. Normal operation still works (withdraw)
     client.cancel_subscription(&sub_id, &subscriber);
+    // Cancel escrows the balance (#604); advance past the window before withdrawing.
+    env.ledger()
+        .with_mut(|l| l.timestamp += crate::CANCELLATION_ESCROW_WINDOW_SECS + 1);
     client.withdraw_subscriber_funds(&sub_id, &subscriber);
 
     let sub_balance = token::Client::new(&env, &token_addr).balance(&subscriber);
@@ -520,8 +527,11 @@ fn test_recovery_rejected_for_cancelled_subscription_funds() {
     );
     assert_eq!(balance_client.balance(&admin_recipient), 0i128);
 
-    // After the subscriber withdraws, the refund has left the contract and the
-    // surplus is *still* zero — the subscriber, not the admin, is paid.
+    // After the subscriber withdraws (once the escrow window has elapsed), the
+    // refund has left the contract and the surplus is *still* zero — the
+    // subscriber, not the admin, is paid.
+    env.ledger()
+        .with_mut(|l| l.timestamp += crate::CANCELLATION_ESCROW_WINDOW_SECS + 1);
     client.withdraw_subscriber_funds(&sub_id, &subscriber);
     let after_withdraw = client.get_token_reconciliation(&token_addr);
     assert_eq!(after_withdraw.recoverable_amount, 0i128);

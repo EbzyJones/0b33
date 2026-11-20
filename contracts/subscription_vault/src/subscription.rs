@@ -66,8 +66,8 @@ use crate::safe_math::{safe_add, safe_add_balance, safe_sub, safe_sub_balance};
 use crate::state_machine::transition_to;
 use crate::statements::append_statement;
 use crate::types::{
-    BillingChargeKind, CancellationEscrow, CancellationEscrowReleasedEvent, DataKey,
-    EmergencyWithdrawIntent, Error, FundsDepositedEvent,
+    BillingChargeKind, CancellationEscrow, CancellationEscrowOpenedEvent,
+    CancellationEscrowReleasedEvent, DataKey, EmergencyWithdrawIntent, Error, FundsDepositedEvent,
     GlobalCapDefaultUpdatedEvent, LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
     MerchantCapDefaultUpdatedEvent, PartialRefundEvent, PlanMaxActiveUpdatedEvent, PlanTemplate,
     PlanTemplateUpdatedEvent, SubscriberEmergencyWithdrawEvent, SubscriberWithdrawalEvent,
@@ -75,7 +75,7 @@ use crate::types::{
     SubscriptionCancelledEvent, SubscriptionCreatedEvent, SubscriptionMigratedEvent,
     SubscriptionRecoveryReadyEvent, SubscriptionStatus, UsageLimits, UsageLimitsConfiguredEvent,
     TOPIC_CAP_REACH, TOPIC_CHARGED, TOPIC_CREATED, TOPIC_DEPOSITED, TOPIC_ONE_OFF_CHARGED,
-    BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
+    BATCH_MAX_SIZE, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD, CANCELLATION_ESCROW_WINDOW_SECS,
 };
 use soroban_sdk::{Address, Env, Symbol, TryFromVal, Val, Vec};
 
@@ -1155,25 +1155,17 @@ pub fn do_cancel_subscription(
         crate::blocklist::require_not_blocklisted(env, &sub.subscriber)?;
     }
 
-    // Reject double-cancellation of an already Cancelled subscription.
+    // Idempotent: a subscription that is already `Cancelled` is left untouched —
+    // no re-transition, no second escrow, and no duplicate event. This mirrors
+    // the already-`Paused` short-circuit in `do_pause_subscription` and matches
+    // the documented contract (docs/cancellation.md, docs/subscription_lifecycle.md).
     if sub.status == SubscriptionStatus::Cancelled {
-        return Err(Error::InvalidStatusTransition);
+        return Ok(());
     }
 
     apply_cancellation(env, subscription_id, sub, authorizer)
 }
 
-/// Mutation tail shared by single ([`do_cancel_subscription`]) and bulk
-/// ([`do_bulk_cancel_subscriptions`]) cancellation paths.
-///
-/// The caller is responsible for **all** authorization and for verifying that
-/// `sub` is neither expired nor already `Cancelled`. This helper transitions to
-/// `Cancelled`, refunds any remaining prepaid balance to the subscriber using
-/// the Checks-Effects-Interactions order, removes the id from the merchant,
-/// token, and subscriber indexes, and emits [`SubscriptionCancelledEvent`].
-///
-/// `authorizer` is recorded verbatim in the emitted event (the admin/operator on
-/// the bulk path, or the subscriber/merchant on the single path).
 /// Returns the token amount to place into cancellation escrow for a subscription
 /// with the given `prepaid_balance`.
 ///
@@ -1184,6 +1176,29 @@ pub fn compute_cancel_refund(prepaid_balance: i128) -> i128 {
     prepaid_balance
 }
 
+/// Mutation tail shared by single ([`do_cancel_subscription`]) and bulk
+/// ([`do_bulk_cancel_subscriptions`]) cancellation paths.
+///
+/// The caller is responsible for **all** authorization and for verifying that
+/// `sub` is neither expired nor already `Cancelled`. This helper transitions to
+/// `Cancelled`, places any remaining prepaid balance into a time-locked
+/// cancellation escrow using the Checks-Effects-Interactions order, removes the
+/// id from the merchant, token, and subscriber indexes, and emits
+/// [`SubscriptionCancelledEvent`].
+///
+/// `authorizer` is recorded verbatim in the emitted event (the admin/operator on
+/// the bulk path, or the subscriber/merchant on the single path).
+///
+/// # Atomicity (#604)
+///
+/// The `Cancelled` status write ([`write_subscription`]) and the
+/// `DataKey::CancellationEscrow` write both execute inside this **single Soroban
+/// contract invocation**. Soroban commits every storage write of one invocation
+/// as a single atomic transaction: either both take effect or the entire
+/// invocation reverts. There is no interleaving point between them — no
+/// observation, TTL eviction, or re-entrant call can occur mid-invocation — so
+/// the escrow record can never be silently dropped while the subscription is
+/// marked `Cancelled`. See `docs/cancellation.md`.
 fn apply_cancellation(
     env: &Env,
     subscription_id: u32,
@@ -1199,27 +1214,66 @@ fn apply_cancellation(
     if was_active {
         decrement_subscriber_active_count(env, &sub.subscriber);
     }
+    let original_prepaid_balance = sub.prepaid_balance;
     let refund_amount = compute_cancel_refund(sub.prepaid_balance);
-    let subscriber_addr = sub.subscriber.clone();
-    let token_addr = sub.token.clone();
 
     // EFFECTS (CEI pattern): zero the prepaid balance and persist state before
-    // any external token transfer so a re-entrant call sees a zeroed balance.
+    // any external interaction so a re-entrant call sees a zeroed balance.
     sub.prepaid_balance = 0;
     write_subscription(env, subscription_id, &sub);
 
-    // INTERACTIONS: auto-refund remaining prepaid balance directly to the
-    // subscriber at cancellation time (#343). This is the simplest correct
-    // implementation: the subscriber gets their funds back immediately without
-    // requiring a separate withdraw call. The accounting ledger is decremented
-    // to keep the vault's tracked total in sync with its on-chain token balance.
+    // EFFECTS: instead of refunding immediately, hold the refund in a
+    // time-locked escrow so the merchant has a window to dispute the
+    // cancellation (#569). The tokens stay in the contract and remain counted
+    // by `total_accounted`; the accounting ledger is only decremented when the
+    // escrow is later released (claim / withdraw / dispute-resolution).
+    //
+    // Atomicity (#604): `write_subscription` above and the escrow `set` below
+    // run inside this single Soroban contract invocation. Soroban applies every
+    // storage write of one invocation as a single atomic transaction — the
+    // `Cancelled` status transition and the `DataKey::CancellationEscrow`
+    // record are committed together or not at all. No observation, eviction, or
+    // re-entrant call can interleave between them, so the escrow can never be
+    // silently dropped while the subscription is marked cancelled.
     if refund_amount > 0 {
-        crate::accounting::sub_total_accounted(env, &token_addr, refund_amount)?;
-        let token_client = soroban_sdk::token::Client::new(env, &token_addr);
-        token_client.transfer(
-            &env.current_contract_address(),
-            &subscriber_addr,
-            &refund_amount,
+        let now = env.ledger().timestamp();
+        let released_at = now
+            .checked_add(CANCELLATION_ESCROW_WINDOW_SECS)
+            .ok_or(Error::Overflow)?;
+
+        let escrow = CancellationEscrow {
+            subscription_id,
+            amount: refund_amount,
+            token: sub.token.clone(),
+            subscriber: sub.subscriber.clone(),
+            merchant: sub.merchant.clone(),
+            released_at,
+        };
+
+        // Defensive: the escrowed amount must equal the prepaid balance zeroed
+        // above, or the persisted escrow would drift from the ledger.
+        assert_eq!(
+            escrow.amount, original_prepaid_balance,
+            "cancellation escrow amount must equal prepaid_balance at cancellation time"
+        );
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::CancellationEscrow(subscription_id), &escrow);
+
+        env.events().publish(
+            (Symbol::new(env, "cancellation_escrow_opened"), subscription_id),
+            CancellationEscrowOpenedEvent {
+                subscription_id,
+                subscriber: sub.subscriber.clone(),
+                merchant: sub.merchant.clone(),
+                token: sub.token.clone(),
+                amount: refund_amount,
+                released_at,
+                timestamp: now,
+                schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
+            },
         );
     }
 
@@ -2803,6 +2857,7 @@ pub fn do_withdraw_subscriber_funds(
                 amount: amount_to_refund,
                 timestamp: env.ledger().timestamp(),
                 schema_version: crate::types::EVENT_SCHEMA_VERSION,
+                contract_id: env.current_contract_address(),
             },
         );
     }

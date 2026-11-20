@@ -1,4 +1,4 @@
-﻿# Error Codes and Handling
+# Error Codes and Handling
 
  This document defines the canonical error taxonomy for `subscription_vault` and the stable numeric codes clients should use for UX, retry policy, alerting, and backend integration.
 
@@ -174,6 +174,7 @@ Column definitions:
 | 5006 | `OracleNotConfigured` | Accounting | `lib.rs`, `oracle.rs`, `oracle_adapter.rs`, `test.rs`, `test_oracle_liveness.rs` | Admin must call set_oracle_config with a valid oracle address. | OracleConfigUpdatedEvent |
 | 5007 | `OraclePriceUnavailable` | Accounting | `oracle.rs`, `oracle_adapter.rs`, `test.rs` | Retry only after oracle data feed recovers. | OracleChargeResolvedEvent |
 | 5008 | `OraclePriceStale` | Accounting | `oracle.rs`, `oracle_adapter.rs`, `test.rs`, `test_oracle_liveness.rs` | Retry only after a fresh oracle quote is published. | OracleChargeResolvedEvent |
+| 5009 | `AccountingInvariantViolation` | Accounting | `invariants.rs` | Treat as a critical accounting failure: the vault's live token balance is below its accounted total. Pause writes and investigate reconciliation (get_token_reconciliation) before retrying. Emitted by invariants::assert_token_balance_invariant on the charge/withdraw paths; the transaction is reverted (fail-closed). Not user-retriable. | — |
 | 6001 | `SubscriptionLimitReached` | Limits | `lib.rs`, `subscription.rs`, `test.rs` | Treat as terminal capacity failure; no new subscriptions can be created. | — |
 | 6002 | `LifetimeCapReached` | Limits | `admin.rs`, `charge_core.rs`, `subscription.rs`, `test.rs`, `test_emergency_stop_lifetime_caps.rs` | Stop charging; surface terminal state to user. | LifetimeCapReachedEvent |
 | 6003 | `UsageNotEnabled` | Limits | `charge_core.rs`, `subscription.rs`, `test.rs` | Fix request — subscription was created with usage_enabled=false. | — |

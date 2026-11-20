@@ -1014,11 +1014,11 @@ pub fn credit_merchant_balance_for_token(
     // ── EFFECTS: register token
     add_merchant_token(env, merchant, token_addr);
 
-    // ── ACCOUNTING (invariant anchor)
-    crate::accounting::add_total_accounted(env, token_addr, amount)?;
-
-    // ── INVARIANT (test/CI only)
-    #[cfg(any(test, feature = "invariants"))]
+    // ── INVARIANT (always on)
+    // Crediting a merchant moves value between internal buckets (subscriber
+    // prepaid balance -> merchant liability); no tokens enter or leave the
+    // vault, so `TotalAccounted` must not change here. The guard verifies no
+    // prior drift has accumulated.
     crate::invariants::assert_token_balance_invariant(env, token_addr)?;
 
     Ok(())
@@ -1179,8 +1179,7 @@ pub fn withdraw_merchant_funds_for_token(
     // ─────────────── INTERACTION ───────────────
     token_client.transfer(&contract, &merchant, &amount);
 
-    // ─────────────── INVARIANT ───────────────
-    #[cfg(any(test, feature = "invariants"))]
+    // ─────────────── INVARIANT (always on) ───────────────
     crate::invariants::assert_token_balance_invariant(env, &token_addr)?;
 
     Ok(())
@@ -1243,7 +1242,7 @@ pub fn merchant_refund(
     // INTERACTIONS
     let token_client = token::Client::new(env, &token_addr);
     token_client.transfer(&env.current_contract_address(), &subscriber, &amount);
-    #[cfg(any(test, feature = "invariants"))]
+    // INVARIANT (always on): refunding a subscriber removes tokens from the vault.
     crate::invariants::assert_token_balance_invariant(env, &token_addr)?;
     Ok(())
 }
@@ -1362,7 +1361,7 @@ fn flush_merchant_token(
     // INTERACTIONS
     let token_client = token::Client::new(env, token);
     token_client.transfer(&env.current_contract_address(), &payout_address, &balance);
-    #[cfg(any(test, feature = "invariants"))]
+    // INVARIANT (always on): flushing a merchant removes tokens from the vault.
     crate::invariants::assert_token_balance_invariant(env, token)?;
     Ok(balance)
 }
@@ -2199,8 +2198,7 @@ pub fn withdraw_sub_account_funds(
     // INTERACTION: Transfer tokens to merchant
     token_client.transfer(&contract, &merchant, &amount);
 
-    // INVARIANT (test/CI only)
-    #[cfg(any(test, feature = "invariants"))]
+    // INVARIANT (always on)
     crate::invariants::assert_token_balance_invariant(env, &token_addr)?;
 
     Ok(())

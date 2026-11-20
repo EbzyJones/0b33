@@ -233,12 +233,19 @@ fn test_chained_charge_and_cancel_preserves_balance() {
     // 3. Cancel
     client.cancel_subscription(&id, &subscriber);
 
-    // 4. Verify final state
+    // 4. Verify final state — cancellation moves the remaining prepaid balance
+    // into the time-locked cancellation escrow (#604).
     let final_sub = client.get_subscription(&id);
     assert_eq!(final_sub.status, SubscriptionStatus::Cancelled);
-    assert_eq!(final_sub.prepaid_balance, PREPAID - AMOUNT);
+    assert_eq!(final_sub.prepaid_balance, 0);
+    assert_eq!(
+        client.get_cancellation_escrow(&id).amount,
+        PREPAID - AMOUNT
+    );
 
-    // 5. Withdrawal succeeds
+    // 5. Withdrawal succeeds once the escrow window has elapsed.
+    env.ledger()
+        .with_mut(|l| l.timestamp += crate::CANCELLATION_ESCROW_WINDOW_SECS + 1);
     client.withdraw_subscriber_funds(&id, &subscriber);
     let final_balance = soroban_sdk::token::Client::new(&env, &token).balance(&subscriber);
     // Initial mint (PREPAID) + withdrawal (PREPAID - AMOUNT) = 2*PREPAID - AMOUNT

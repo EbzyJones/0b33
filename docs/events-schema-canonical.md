@@ -368,7 +368,11 @@ Emitted when a merchant withdraws earned funds via `withdraw_merchant_funds()` o
 
 **Topic:** `("partial_refund", subscription_id)`
 
-Emitted when a cancelled subscription has its refund amount transferred back to subscriber.
+Emitted by `partial_refund` when an admin refunds part (or all) of a live
+subscription's remaining `prepaid_balance` back to the subscriber. It is **not**
+emitted for cancellations: a cancellation holds the remaining balance in the
+time-locked cancellation escrow (see `CancellationEscrowOpenedEvent`) and only
+releases it via `claim_cancellation_escrow`.
 
 **Fields:**
 

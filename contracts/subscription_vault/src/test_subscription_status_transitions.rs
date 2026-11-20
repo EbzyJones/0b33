@@ -173,8 +173,10 @@ fn test_active_to_cancelled() {
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
-    // Balance is preserved (not burned on cancel — subscriber can still withdraw).
-    assert_eq!(sub.prepaid_balance, balance_before);
+    // Balance is preserved (not burned on cancel) but moved into the time-locked
+    // cancellation escrow (#604) — the subscriber can still withdraw it later.
+    assert_eq!(sub.prepaid_balance, 0);
+    assert_eq!(client.get_cancellation_escrow(&id).amount, balance_before);
 }
 
 // ── Valid transition: Active → InsufficientBalance via underfunded charge ─────

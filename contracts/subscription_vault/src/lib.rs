@@ -32,6 +32,7 @@
 
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
 
+mod accounting;
 mod admin;
 pub mod blocklist;
 mod charge_core;
@@ -39,7 +40,6 @@ mod coupon;
 mod dispute;
 mod governance;
 mod idempotency;
-#[cfg(any(test, feature = "invariants"))]
 mod invariants;
 mod merchant;
 mod metadata;
@@ -461,26 +461,6 @@ pub mod statements {
     }
 }
 
-/// Accounting: tracks total tokens accounted for across all subscriptions.
-pub mod accounting {
-    #![allow(unused_variables, dead_code)]
-    use crate::types::Error;
-    use soroban_sdk::{Address, Env, Symbol};
-
-    pub fn add_total_accounted(_env: &Env, _token: &Address, _amount: i128) -> Result<(), Error> {
-        Ok(())
-    }
-    pub fn sub_total_accounted(_env: &Env, _token: &Address, _amount: i128) -> Result<(), Error> {
-        Ok(())
-    }
-    pub fn get_total_accounted(env: &Env, token: &Address) -> Result<i128, Error> {
-        if !crate::admin::is_token_accepted(env, token) {
-            return Err(Error::InvalidToken);
-        }
-        Ok(0)
-    }
-}
-
 /// Oracle: optional on-chain price oracle for dynamic charge amounts.
 pub mod oracle {
     #![allow(unused_variables, dead_code)]
@@ -854,7 +834,7 @@ pub use types::{
     LIFETIME_CAP_REACHED_EVENT_SCHEMA_VERSION, NONCE_CONSUMED_EVENT_SCHEMA_VERSION,
     PROTOCOL_FEE_CHARGED_EVENT_SCHEMA_VERSION, RECOVERY_EVENT_SCHEMA_VERSION,
     SPLIT_CHARGE_EVENT_SCHEMA_VERSION, SUBSCRIBER_WITHDRAWAL_EVENT_SCHEMA_VERSION,
-    SUBSCRIPTION_AUTO_PAUSED_EVENT_SCHEMA_VERSION, SUBSCRIPTION_CANCELLED_EVENT_SCHEMA_VERSION,
+    SUBSCRIPTION_AUTO_PAUSED_EVENT_SCHEMA_VERSION,
     SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION, SUBSCRIPTION_CHARGE_FAILED_EVENT_SCHEMA_VERSION,
     SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION, SUBSCRIPTION_PAUSED_EVENT_SCHEMA_VERSION,
     PauseInitiatorRole,
@@ -2371,24 +2351,12 @@ impl SubscriptionVault {
         subscription_id: u32,
         authorizer: Address,
     ) -> Result<(), Error> {
-        subscription::do_cancel_subscription(&env, subscription_id, authorizer.clone())?;
-        let sub = queries::get_subscription(&env, subscription_id)?;
-        env.events().publish(
-            (Symbol::new(&env, "subscription_cancelled"), subscription_id),
-            SubscriptionCancelledEvent {
-                subscription_id,
-                subscriber: sub.subscriber,
-                merchant: sub.merchant,
-                token: sub.token,
-                authorizer,
-                refund_amount: sub.prepaid_balance,
-                timestamp: env.ledger().timestamp(),
-                batch_nonce: admin::current_batch_nonce(&env),
-                schema_version: crate::types::SUBSCRIPTION_CANCELLED_EVENT_SCHEMA_VERSION,
-                contract_id: env.current_contract_address(),
-            },
-        );
-        Ok(())
+        // `do_cancel_subscription` (via `apply_cancellation`) emits the single
+        // `subscription_cancelled` event carrying the real escrowed refund
+        // amount, in the same invocation that writes the `Cancelled` status and
+        // the `DataKey::CancellationEscrow` record (#604). Republishing here
+        // would duplicate the event with a stale `refund_amount` of 0.
+        subscription::do_cancel_subscription(&env, subscription_id, authorizer)
     }
 
     /// Request a subscriber emergency withdrawal after a 72-hour cooldown.

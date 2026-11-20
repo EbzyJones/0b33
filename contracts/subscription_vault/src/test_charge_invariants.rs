@@ -105,6 +105,15 @@ fn arb_op() -> impl Strategy<Value = Op> {
 
 // ---------------------------------------------------------------------------
 // Accounting parity model for merchant earnings / total_accounted
+//
+// Mirrors the accounting semantics now wired into the contract
+// (`src/accounting.rs` + `src/invariants.rs`):
+//   - `TotalAccounted(token)` rises only on subscriber deposits and falls only
+//     when funds leave the vault (withdrawals, refunds).
+//   - A charge moves value between internal buckets (subscriber prepaid ->
+//     merchant liability); it must leave `TotalAccounted` untouched.
+// The maintained identity is therefore:
+//     TotalAccounted(token) == Σ prepaid_balance + Σ merchant_balance(token)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,6 +141,7 @@ impl MerchantEarningsModel {
 
 #[derive(Debug, Clone)]
 enum AccountingOp {
+    Deposit { token: u8, amount: i128 },
     Charge { merchant: u8, token: u8, amount: i128 },
     Withdrawal { merchant: u8, token: u8, amount: i128 },
     Cancellation { merchant: u8, token: u8, amount: i128 },
@@ -139,6 +149,8 @@ enum AccountingOp {
 
 fn arb_accounting_op() -> impl Strategy<Value = AccountingOp> {
     prop_oneof![
+        (0u8..=3u8, 1i128..=50_000i128)
+            .prop_map(|(token, amount)| AccountingOp::Deposit { token, amount }),
         (0u8..=7u8, 0u8..=3u8, 1i128..=50_000i128).prop_map(|(merchant, token, amount)| {
             AccountingOp::Charge {
                 merchant,
@@ -165,25 +177,42 @@ fn arb_accounting_op() -> impl Strategy<Value = AccountingOp> {
 
 #[derive(Debug, Default)]
 struct AccountingModel {
+    /// The global custody anchor, `DataKey::TotalAccounted(token)`.
     total_accounted: BTreeMap<u8, i128>,
+    /// Sum of every subscription's `prepaid_balance` per token.
+    total_prepaid: BTreeMap<u8, i128>,
     merchant_earnings: BTreeMap<(u8, u8), MerchantEarningsModel>,
 }
 
 impl AccountingModel {
     fn apply(&mut self, op: &AccountingOp) {
         match op {
+            AccountingOp::Deposit { token, amount } => {
+                // A deposit pulls new tokens into the vault: the subscriber's
+                // prepaid balance and the global anchor both rise.
+                *self.total_prepaid.entry(*token).or_insert(0) =
+                    self.total_prepaid.get(token).copied().unwrap_or(0).saturating_add(*amount);
+                *self.total_accounted.entry(*token).or_insert(0) =
+                    self.total_accounted.get(token).copied().unwrap_or(0).saturating_add(*amount);
+            }
             AccountingOp::Charge {
                 merchant,
                 token,
                 amount,
             } => {
+                // A charge only moves value between internal buckets
+                // (subscriber prepaid -> merchant liability). No tokens enter or
+                // leave the vault, so `total_accounted` must NOT move.
+                let prepaid = self.total_prepaid.get(token).copied().unwrap_or(0);
+                if prepaid < *amount {
+                    return; // insufficient prepaid balance: charge is a no-op
+                }
+                self.total_prepaid.insert(*token, prepaid - *amount);
                 let entry = self
                     .merchant_earnings
                     .entry((*merchant, *token))
                     .or_insert_with(MerchantEarningsModel::new);
                 entry.accruals = entry.accruals.saturating_add(*amount);
-                *self.total_accounted.entry(*token).or_insert(0) =
-                    self.total_accounted.get(token).copied().unwrap_or(0).saturating_add(*amount);
             }
             AccountingOp::Withdrawal {
                 merchant,
@@ -218,8 +247,15 @@ impl AccountingModel {
         }
     }
 
+    /// The identity maintained on-chain:
+    /// `TotalAccounted(token) == Σ prepaid_balance + Σ merchant_balance(token)`.
     fn check_parity(&self) -> bool {
-        let mut tokens = self.total_accounted.keys().copied().collect::<Vec<_>>();
+        let mut tokens = self
+            .total_accounted
+            .keys()
+            .chain(self.total_prepaid.keys())
+            .copied()
+            .collect::<Vec<_>>();
         for ((_, token), _) in &self.merchant_earnings {
             if !tokens.contains(token) {
                 tokens.push(*token);
@@ -228,13 +264,14 @@ impl AccountingModel {
 
         tokens.into_iter().all(|token| {
             let accounted = self.total_accounted.get(&token).copied().unwrap_or(0);
+            let prepaid = self.total_prepaid.get(&token).copied().unwrap_or(0);
             let merchant_sum = self
                 .merchant_earnings
                 .iter()
                 .filter(|((_, merchant_token), _)| *merchant_token == token)
                 .map(|(_, earnings)| earnings.balance())
                 .sum::<i128>();
-            merchant_sum == accounted
+            accounted == prepaid + merchant_sum
         })
     }
 }
@@ -498,8 +535,12 @@ proptest! {
     }
 }
 
+/// The custody anchor always equals subscriber prepaid balances plus merchant
+/// liabilities, across arbitrary deposit / charge / withdrawal / cancellation
+/// sequences. Charges move value between the two buckets and must not touch the
+/// anchor; only deposits and fund outflows change it.
 #[test]
-fn prop_merchant_earnings_sum_equals_total_accounted() {
+fn prop_accounted_equals_prepaid_plus_merchant_liabilities() {
     fn runner(ops: Vec<AccountingOp>) {
         let mut model = AccountingModel::default();
 
@@ -507,7 +548,7 @@ fn prop_merchant_earnings_sum_equals_total_accounted() {
             model.apply(op);
             assert!(
                 model.check_parity(),
-                "earnings/accounting drift after op {idx}: {:?}",
+                "accounting drift after op {idx}: {:?}",
                 op
             );
         }

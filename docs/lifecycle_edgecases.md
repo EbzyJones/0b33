@@ -226,10 +226,12 @@ All lifecycle operations (`pause_subscription`, `resume_subscription`, `cancel_s
 
 ### Balance Behavior
 
-- `prepaid_balance` is preserved across all lifecycle operations
-- Only charges and deposits modify balance
-- Cancelled subscriptions retain balance for potential refunds
-- Balance can be withdrawn after cancellation (future feature)
+- `prepaid_balance` is preserved across pause/resume and other non-terminal operations
+- Only charges and deposits modify balance while a subscription is live
+- On cancellation, any remaining `prepaid_balance` is zeroed and moved into the
+  time-locked cancellation escrow
+- The escrowed balance is recovered with `claim_cancellation_escrow` once
+  `CANCELLATION_ESCROW_WINDOW_SECS` (24h) has elapsed (or disputed during the window)
 
 ### Grace Period (InsufficientBalance)
 
@@ -244,7 +246,7 @@ All lifecycle operations (`pause_subscription`, `resume_subscription`, `cancel_s
 
 1. **Grace Period Duration**: Add configurable grace period before auto-cancellation
 2. **Pause Duration Limits**: Optional maximum pause duration
-3. **Refund on Cancel**: Automatic refund of remaining balance
+3. **Refund on Cancel**: Already implemented — cancellation escrows the remaining balance (no immediate refund); recovery is via `claim_cancellation_escrow`
 4. **Pause History**: Track pause/resume events for analytics
 5. **Cancellation Reasons**: Enum for cancellation reasons (user, merchant, system)
 

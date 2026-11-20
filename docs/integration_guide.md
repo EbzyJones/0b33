@@ -116,8 +116,8 @@ withdrawals, pause/resume/cancel, and export calls are **not** blocked.
 | `deposit_funds` | `(subscription_id, subscriber, amount) -> ()` | Subscriber | Must be ≥ `min_topup`. Blocked by emergency stop and blocklist. Emits `FundsDepositedEvent`. Emits `RecoveryReadyEvent` when balance becomes sufficient. |
 | `pause_subscription` | `(subscription_id, authorizer) -> ()` | Subscriber or Merchant | Allowed from `Active` only. Emits `SubscriptionPausedEvent`. |
 | `resume_subscription` | `(subscription_id, authorizer) -> ()` | Subscriber or Merchant | From `Paused`: no balance check. From `GracePeriod` or `InsufficientBalance`: requires `prepaid_balance >= amount`. Emits `SubscriptionResumedEvent`. |
-| `cancel_subscription` | `(subscription_id, authorizer) -> ()` | Subscriber or Merchant | Terminal. Allowed from any non-`Cancelled` state. Emits `SubscriptionCancelledEvent`. |
-| `withdraw_subscriber_funds` | `(subscription_id, subscriber) -> ()` | Subscriber | Returns remaining `prepaid_balance` to subscriber. Subscription must be `Cancelled`. |
+| `cancel_subscription` | `(subscription_id, authorizer) -> ()` | Subscriber or Merchant | Terminal. Allowed from any non-`Cancelled` state; a call on an already-`Cancelled` subscription is an idempotent no-op (`Ok(())`, no event). Any remaining `prepaid_balance` is moved into the time-locked cancellation escrow. Emits `SubscriptionCancelledEvent` (and `cancellation_escrow_opened` when a balance remains). |
+| `withdraw_subscriber_funds` | `(subscription_id, subscriber) -> ()` | Subscriber | Returns remaining `prepaid_balance` to subscriber. Subscription must be `Cancelled`/`Expired`/`Archived`. When `prepaid_balance` is zero it instead releases a matured cancellation escrow (see `claim_cancellation_escrow`). |
 | `partial_refund` | `(admin, subscription_id, subscriber, amount) -> ()` | Admin | Debits `prepaid_balance` and transfers `amount` back to subscriber. |
 | `migrate_subscription_to_plan` | `(subscriber, subscription_id, new_plan_template_id) -> ()` | Subscriber | Migrates subscription to a newer version of the same plan template. Token cannot change. |
 

@@ -275,7 +275,7 @@ These tests use the shared fixture constants from `contracts/subscription_vault/
 3. After two successful interval charges: status remains **Active**, `prepaid_balance = 30_000_000`, `lifetime_charged = 20_000_000`, merchant balance becomes `20_000_000`, and the vault has emitted two `charged` events.
 4. Statement reads must show two immutable rows with monotonic sequences `0` and `1`. Newest-first reads return sequence `1` first; cursor pagination returns `next_cursor = Some(0)` for the first page and `None` for the second.
 5. After `withdraw_merchant_funds(20_000_000)`: merchant internal balance is `0`, merchant wallet receives `20_000_000`, vault token balance falls to `30_000_000`, and one `withdrawn` event is emitted by the vault.
-6. After cancel plus subscriber refund: status is **Cancelled**, remaining prepaid balance is withdrawn back to the subscriber, and vault token balance returns to `0`.
+6. After cancel plus escrow claim: status is **Cancelled** and the remaining prepaid balance (`30_000_000`) is moved into the time-locked cancellation escrow, so the vault token balance is unchanged. Once `CANCELLATION_ESCROW_WINDOW_SECS` (24h) elapses, `claim_cancellation_escrow` releases the escrow to the subscriber and the vault token balance returns to `0`.
 
 ### Expected outputs: delayed charge plus minimum top-up progression
 

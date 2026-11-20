@@ -121,11 +121,12 @@ fn test_multi_actor_e2e_flow() {
     );
     assert_eq!(token.balance(&vault_id), deposit_amount - partial_withdraw);
 
-    // Step 5: `cancel_subscription` — automatically refunds remaining prepaid balance
+    // Step 5: `cancel_subscription` — moves the remaining prepaid balance into
+    // the time-locked cancellation escrow rather than refunding it synchronously.
     let subscriber_balance_before_cancel = token.balance(&subscriber);
     let vault_balance_before_cancel = token.balance(&vault_id);
     let sub_before_cancel = vault.get_subscription(&sub_id);
-    let expected_refund = sub_before_cancel.prepaid_balance;
+    let expected_escrow = sub_before_cancel.prepaid_balance;
 
     vault.cancel_subscription(&sub_id, &subscriber);
 
@@ -133,21 +134,20 @@ fn test_multi_actor_e2e_flow() {
     assert_eq!(sub_state.status, SubscriptionStatus::Cancelled);
     assert_eq!(sub_state.prepaid_balance, 0);
 
-    // Subscriber received the refund
+    // The balance is escrowed, not paid out: neither the subscriber balance nor
+    // the vault balance changes at cancellation time.
     assert_eq!(
-        token.balance(&subscriber),
-        subscriber_balance_before_cancel + expected_refund
+        vault.get_cancellation_escrow(&sub_id).amount,
+        expected_escrow
     );
-    // Vault no longer holds the refunded amount
-    assert_eq!(
-        token.balance(&vault_id),
-        vault_balance_before_cancel - expected_refund
-    );
+    assert_eq!(token.balance(&subscriber), subscriber_balance_before_cancel);
+    assert_eq!(token.balance(&vault_id), vault_balance_before_cancel);
 
-    // Vault balance should now exactly match the merchant's unwithdrawn funds
+    // Vault balance now equals the merchant's unwithdrawn funds plus the escrow
+    // still held on behalf of the subscriber.
     assert_eq!(
         token.balance(&vault_id),
-        vault.get_merchant_balance(&merchant)
+        vault.get_merchant_balance(&merchant) + expected_escrow
     );
 }
 

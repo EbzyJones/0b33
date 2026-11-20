@@ -16,7 +16,7 @@
 use crate::types::{
     DataKey, Error, SubscriptionStatus, SubscriptionVault, SubscriptionVaultClient,
 };
-use soroban_sdk::{testutils::Address as _, Address, Env, Symbol};
+use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env, Symbol};
 
 // ── constants ────────────────────────────────────────────────────────────────
 const T0: u64 = 1_000;
@@ -312,6 +312,9 @@ fn test_withdraw_subscriber_state_committed_before_transfer() {
     let vault_before = token_client.balance(&client.address);
     let subscriber_before = token_client.balance(&subscriber);
 
+    // Cancel escrows the balance (#604); advance past the window to release it.
+    env.ledger()
+        .with_mut(|l| l.timestamp += crate::CANCELLATION_ESCROW_WINDOW_SECS + 1);
     client.withdraw_subscriber_funds(&id, &subscriber);
 
     // Effects committed: balance zeroed
@@ -330,6 +333,9 @@ fn test_withdraw_subscriber_double_withdrawal_rejected() {
 
     client.deposit_funds(&id, &PREPAID, &None::<soroban_sdk::BytesN<32>>);
     client.cancel_subscription(&id, &subscriber);
+    // Cancel escrows the balance (#604); advance past the window to release it.
+    env.ledger()
+        .with_mut(|l| l.timestamp += crate::CANCELLATION_ESCROW_WINDOW_SECS + 1);
     client.withdraw_subscriber_funds(&id, &subscriber);
 
     // Second withdrawal must fail (balance = 0)
@@ -364,6 +370,9 @@ fn test_withdraw_subscriber_exact_amount_transferred() {
     client.cancel_subscription(&id, &subscriber);
 
     let subscriber_before = token_client.balance(&subscriber);
+    // Cancel escrows the balance (#604); advance past the window to release it.
+    env.ledger()
+        .with_mut(|l| l.timestamp += crate::CANCELLATION_ESCROW_WINDOW_SECS + 1);
     client.withdraw_subscriber_funds(&id, &subscriber);
 
     assert_eq!(
@@ -744,7 +753,10 @@ fn test_withdraw_subscriber_blocked_by_emergency_stop_no_mutation() {
 
     let result = client.try_withdraw_subscriber_funds(&id, &subscriber);
     assert_eq!(result, Err(Ok(Error::EmergencyStopActive)));
-    assert_eq!(client.get_subscription(&id).prepaid_balance, PREPAID);
+    // Cancel zeroed the prepaid balance into the escrow (#604); the blocked
+    // withdrawal must not have touched either.
+    assert_eq!(client.get_subscription(&id).prepaid_balance, 0);
+    assert_eq!(client.get_cancellation_escrow(&id).amount, PREPAID);
 }
 
 // =============================================================================
@@ -880,6 +892,9 @@ fn test_reentrancy_lock_released_after_failed_withdrawal_not_cancelled() {
 
     // Cancel subscription and retry withdrawal
     client.cancel_subscription(&id, &subscriber);
+    // Cancel escrows the balance (#604); advance past the window to release it.
+    env.ledger()
+        .with_mut(|l| l.timestamp += crate::CANCELLATION_ESCROW_WINDOW_SECS + 1);
     let valid_result = client.try_withdraw_subscriber_funds(&id, &subscriber);
     assert!(
         valid_result.is_ok(),
