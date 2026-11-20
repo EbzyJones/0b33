@@ -873,6 +873,9 @@ pub fn do_rotate_admin(
     // Atomic swap: write new admin before emitting the event so any indexer
     // that reads state on the event sees the already-updated value.
     write_config(env, &DataKey::Admin, &new_admin);
+    env.storage()
+        .persistent()
+        .remove(&DataKey::PendingTreasuryChange);
     crate::governance::invalidate_pending_proposals(env);
 
     // Mark the multi-sig proposal as consumed
@@ -1241,6 +1244,9 @@ pub fn do_claim_admin_role(env: &Env, claimant: Address) -> Result<(), Error> {
 
     storage.remove(&proposal_key(env));
     write_config(env, &DataKey::Admin, &claimant);
+    env.storage()
+        .persistent()
+        .remove(&DataKey::PendingTreasuryChange);
     crate::governance::invalidate_pending_proposals(env);
 
     env.events().publish(
