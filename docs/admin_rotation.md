@@ -188,7 +188,7 @@ only after a 24-hour cooldown has elapsed since the proposal was created
 | Step | Rejects with |
 |------|---------------|
 | `propose_admin` | `Unauthorized` (caller is not the stored admin), `InvalidNewAdmin` (`new_admin == contract address`), `ProposalAlreadyExists` (a proposal is already pending *and still inside its window* — an expired one is replaced) |
-| `claim_admin_role` | `ProposalNotFound`, `ProposalCooldownActive` (within 24 h of the proposal), `ProposalExpired` (also clears the stale proposal), `InvalidClaimant` (not the proposed address) |
+| `claim_admin_role` | `ProposalNotFound`, `ProposalCooldownActive` (within 24 h of the proposal), `ProposalExpired` (also clears the stale proposal), `InvalidClaimant` (not the proposed address), `Forbidden` (the proposed address is blocklisted — a blocklisted address must never be installed as admin) |
 | `cancel_admin_proposal` | `Unauthorized` (caller is not the stored admin), `NoActiveProposal` (nothing pending) |
 
 Only one *claimable* proposal can exist at a time — a second `propose_admin`

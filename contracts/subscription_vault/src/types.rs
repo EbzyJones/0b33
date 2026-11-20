@@ -345,9 +345,15 @@ pub enum DataKey {
     /// Merchant vacation window storing (start_ts, end_ts). Discriminant 69.
     MerchantVacation(Address),
     /// Coupon code bound to a subscription (persistent). Discriminant 70.
+    ///
+    /// Retained (not deleted) when the bound coupon is revoked — see `crate::coupon`
+    /// module docs, "Revocation and binding retention".
     SubCoupon(u32),
     /// Per-subscription per-coupon redemption flag (persistent). Discriminant 69.
     /// Tracks whether a specific (subscription_id, coupon_code) pair has been redeemed.
+    ///
+    /// Retained (not deleted) when the bound coupon is revoked — see `crate::coupon`
+    /// module docs, "Revocation and binding retention".
     SubCouponRedeemed(u32, soroban_sdk::Symbol),
     /// Per-merchant multi-sig withdrawal quorum config (instance). Discriminant 70.
     MerchantMultiSig(Address),
@@ -2135,6 +2141,12 @@ pub struct Coupon {
     /// Ledger timestamp after which the coupon can no longer be applied. 0 = no expiry.
     pub expires_at: u64,
     /// Set to `true` when the merchant explicitly revokes this coupon.
+    ///
+    /// This flag is the sole source of truth for revocation: revoked coupons are
+    /// rejected by `apply_coupon` and skipped at charge time. Revocation does not
+    /// delete the per-subscription `SubCoupon` / `SubCouponRedeemed` bindings —
+    /// those are retained as an audit trail (Issue #602). See the module docs of
+    /// `crate::coupon` for the retention rationale.
     pub revoked: bool,
 }
 

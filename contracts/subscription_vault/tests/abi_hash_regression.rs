@@ -286,10 +286,25 @@ mod abi_hash_regression {
             );
         }
 
-        assert!(
-            names.contains("list_subscriptions_by_token"),
-            "Token query entrypoint `list_subscriptions_by_token` missing from ABI"
-        );
+        // ── Query group ───────────────────────────────────────────────────────
+        let query_required = [
+            "list_subscriptions_by_token",
+            // Cursor-paginated variants added for issue #599 (bounded query
+            // entrypoints).  The unbounded originals are retained above/below
+            // for backwards compatibility; these additive names implement the
+            // instruction-budget guards.
+            "list_credit_limits_paginated",
+            "get_token_reconciliation_paginated",
+            "generate_reconciliation_proof_paginated",
+            "get_contract_reconciliation_summary_paginated",
+        ];
+        for name in &query_required {
+            assert!(
+                names.contains(*name),
+                "Query entrypoint `{}` missing from ABI — was it renamed or removed?",
+                name
+            );
+        }
     }
 
     /// Edge case: a deprecated shim retained for backwards compatibility must

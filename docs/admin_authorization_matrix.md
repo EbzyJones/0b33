@@ -175,7 +175,7 @@ All mutating coupon entrypoints are also blocked during an active emergency stop
 | Entrypoint | Authorization model | Wrong-merchant result | Notes |
 |---|---|---|---|
 | `create_coupon` | `merchant` arg signs the transaction (`merchant.require_auth()`); stored as `coupon.merchant` | Host auth failure if unsigned; no further check needed at creation | Code must be globally unique (`CouponAlreadyExists` if duplicate). Emergency-stop gated. |
-| `revoke_coupon` | `merchant` arg signs (`merchant.require_auth()`); then `coupon.merchant != merchant → Unauthorized` | `Unauthorized` | Any address can call with a valid signature, but only the creating merchant passes the ownership check. Already-bound coupons are skipped silently at charge time after revocation. Emergency-stop gated. |
+| `revoke_coupon` | `merchant` arg signs (`merchant.require_auth()`); then `coupon.merchant != merchant → Unauthorized` | `Unauthorized` | Any address can call with a valid signature, but only the creating merchant passes the ownership check. Revocation flips only `Coupon.revoked`; already-bound coupons are skipped silently at charge time afterwards. The per-subscription `SubCoupon` / `SubCouponRedeemed` bindings are intentionally retained as an audit trail (Issue #602) — see `coupon.rs` module docs "Revocation and binding retention". Emergency-stop gated. |
 
 ### Subscriber-owned coupon entrypoints
 

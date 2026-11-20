@@ -1220,6 +1220,13 @@ pub fn do_claim_admin_role(env: &Env, claimant: Address) -> Result<(), Error> {
         return Err(Error::InvalidClaimant);
     }
 
+    // A blocklisted address must never be installed as admin. Admin calls pass
+    // auth checks before any blocklist gate, so allowing this would grant full
+    // admin access to a blocklisted address.
+    if crate::blocklist::is_blocklisted(env, &claimant) {
+        return Err(Error::Forbidden);
+    }
+
     let now = env.ledger().timestamp();
     if now < proposal.proposed_at.saturating_add(ADMIN_PROPOSAL_COOLDOWN_SECS) {
         return Err(Error::ProposalCooldownActive);

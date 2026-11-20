@@ -12,6 +12,31 @@
 //! 4. **Merchant** may call `revoke_coupon` at any time. Already-bound coupons that have
 //!    been revoked are skipped silently at charge time (to avoid billing outages).
 //!
+//! # Revocation and binding retention (Issue #602)
+//!
+//! `revoke_coupon` only flips `Coupon.revoked` to `true`. It deliberately does **not** delete
+//! the `DataKey::SubCoupon(subscription_id)` / `DataKey::SubCouponRedeemed(subscription_id, code)`
+//! records created by earlier `apply_coupon` calls. Those records are retained on purpose:
+//!
+//! - The `revoked` flag on `DataKey::Coupon(code)` is the single source of truth for
+//!   revocation. `apply_coupon` rejects revoked coupons (`CouponRevoked`) and
+//!   `validate_coupon_for_charge` skips them, so while a coupon is revoked the retained
+//!   bindings are inert — charges keep flowing at the full gross amount (no billing outage).
+//! - The retained `SubCoupon` / `SubCouponRedeemed` records form an **audit trail**: they
+//!   preserve which subscriptions bound the coupon and keep the per-`(subscription, code)`
+//!   redemption history consistent with the global `CouponRedemptions` counter across
+//!   revocation.
+//! - There is no reverse index from a coupon code to the subscriptions bound to it, so
+//!   eagerly purging these records inside `revoke_coupon` would require an unbounded scan of
+//!   every subscription ID (`0..NextId`) — up to `MAX_TOTAL_SUBSCRIPTIONS`. Retention avoids
+//!   that cost.
+//!
+//! **Invariant for any future re-enable / delete path:** because the bindings are retained,
+//! clearing `revoked` (or re-creating a coupon with the same code) would immediately
+//! reactivate the discount for every previously bound subscription. Any such path MUST
+//! invalidate the retained `SubCoupon` / `SubCouponRedeemed` records rather than merely
+//! flipping `revoked` back to `false`.
+//!
 //! # Per-Subscription Redemption
 //!
 //! Once a coupon is applied to a specific subscription, it cannot be reapplied to that same
@@ -38,8 +63,11 @@
 //! |---|---|---|
 //! | `DataKey::Coupon(code)` | `Coupon` | Coupon record |
 //! | `DataKey::CouponRedemptions(code)` | `u32` | Global bind count |
-//! | `DataKey::SubCoupon(subscription_id)` | `Symbol` | Subscription → coupon code |
-//! | `DataKey::SubCouponRedeemed(subscription_id, code)` | `bool` | Per-subscription redemption flag |
+//! | `DataKey::SubCoupon(subscription_id)` | `Symbol` | Subscription → coupon code (retained on revoke) |
+//! | `DataKey::SubCouponRedeemed(subscription_id, code)` | `bool` | Per-subscription redemption flag (retained on revoke) |
+//!
+//! The last two keys are deliberately **not** removed by `revoke_coupon` — see
+//! "Revocation and binding retention" above.
 
 #![allow(dead_code)]
 
@@ -168,6 +196,11 @@ pub fn create_coupon(
 ///
 /// Revoked coupons cannot be applied by new subscribers. Already-bound
 /// coupons are skipped silently at charge time.
+///
+/// The per-subscription `SubCoupon` / `SubCouponRedeemed` records bound by earlier
+/// `apply_coupon` calls are intentionally **retained as an audit trail** and are not
+/// deleted here — see the module-level "Revocation and binding retention" section for
+/// the rationale and the invariant future re-enable paths must uphold.
 pub fn revoke_coupon(env: &Env, merchant: Address, code: Symbol) -> Result<(), Error> {
     merchant.require_auth();
 

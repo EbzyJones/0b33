@@ -254,6 +254,9 @@ pub fn charge_one(
             if let Some(cached) = cache.get(sub.merchant.clone()) {
                 cached
             } else {
+                // First read for this merchant in the batch: purge any expired
+                // vacation entry before deciding whether charges are blocked.
+                crate::merchant::flush_expired_vacation(env, &sub.merchant, now);
                 let status = (
                     crate::merchant::get_merchant_paused(env, sub.merchant.clone()),
                     crate::merchant::is_merchant_in_vacation(env, &sub.merchant, now),
@@ -262,10 +265,13 @@ pub fn charge_one(
                 status
             }
         }
-        None => (
-            crate::merchant::get_merchant_paused(env, sub.merchant.clone()),
-            crate::merchant::is_merchant_in_vacation(env, &sub.merchant, now),
-        ),
+        None => {
+            crate::merchant::flush_expired_vacation(env, &sub.merchant, now);
+            (
+                crate::merchant::get_merchant_paused(env, sub.merchant.clone()),
+                crate::merchant::is_merchant_in_vacation(env, &sub.merchant, now),
+            )
+        }
     };
 
     // Merchant pause guard — mirrors charge_usage_one enforcement
@@ -309,6 +315,7 @@ pub fn charge_one(
                     now,
                 ));
             }
+            crate::merchant::flush_expired_vacation(env, &payee, now);
             if crate::merchant::is_merchant_in_vacation(env, &payee, now) {
                 return Err(charge_fail(
                     env,
@@ -1056,8 +1063,10 @@ pub fn charge_usage_one(
         ));
     }
 
-    // Merchant vacation guard — block charges during vacation window
+    // Merchant vacation guard — block charges during vacation window.
+    // Purge any expired vacation entry on the first charge after its end_ts.
     let now = env.ledger().timestamp();
+    crate::merchant::flush_expired_vacation(env, &merchant, now);
     if crate::merchant::is_merchant_in_vacation(env, &merchant, now) {
         return Err(charge_fail(
             env,
@@ -1087,6 +1096,7 @@ pub fn charge_usage_one(
                     env.ledger().timestamp(),
                 ));
             }
+            crate::merchant::flush_expired_vacation(env, &payee, now);
             if crate::merchant::is_merchant_in_vacation(env, &payee, now) {
                 return Err(charge_fail(
                     env,
