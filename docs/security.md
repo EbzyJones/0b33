@@ -66,9 +66,15 @@ While the current architecture rigorously applies the CEI pattern and strict ari
 1. **Admin Key Compromise**: 
    - *Risk*: A compromised admin key can force global charges or manipulate thresholds continuously.
    - *Future Hardening*: Transition to multi-signature structures or time-locked upgrades for critical controls.
-2. **Storage Exhaustion (DoS)**: 
-   - *Risk*: An attacker with valid signatures can spam `create_subscription` indefinitely, inflating ledger footprint arbitrarily.
-   - *Future Hardening*: Introduce minimal initial deposit requirements, per-subscriber creation limits, and archival functions.
+2. **Subscription Creation Spam / Sybil Bypass (issue #449)**:
+   - *Risk*: An attacker controlling multiple wallets can circumvent the per-subscriber creation rate limit (`SubscriberCreateCap`, default 50/day) by distributing creation calls across addresses. Each address is rate-limited independently, so a sybil actor with _n_ wallets can create up to `50 × n` subscriptions per day.
+   - *Current mitigations* (defence-in-depth):
+     - **Economic barrier**: every subscription requires a `min_topup` deposit in the settlement token before it is usable. Creating _n_ subscriptions costs at least `min_topup × n` real tokens, bounding practical spam to what an attacker is willing to pay.
+     - **Per-subscriber creation window**: `enforce_creation_rate_limit` caps creations per address to `SubscriberCreateCap` within a 24-hour window, raising the number of wallets required proportionally.
+     - **Per-subscriber active cap**: `SubscriberActiveCapOverride` limits how many concurrent `Active` subscriptions a single address may hold.
+     - **Hard global ceiling**: `MAX_SUBSCRIPTION_ID` (u32::MAX ≈ 4.3 billion) is an absolute upper bound on total subscriptions ever created.
+   - *Accepted limitation*: A global creation counter is not implemented. It would introduce a hot-write bottleneck on instance storage that throttles all legitimate users, while providing only marginal additional protection given the economic barriers above. See the doc comment on `enforce_creation_rate_limit` in `subscription.rs` for the full analysis.
+   - *Operator response options*: raise `min_topup`; enable merchant whitelist mode; blocklist known spam addresses; lower `SubscriberCreateCap`.
 3. **Stored-admin-only batch charging**:
    - *Risk*: `batch_charge` authenticates against the stored admin without an explicit caller parameter, so unauthorized attempts fail at the Soroban host auth layer rather than with a contract `Unauthorized` code.
    - *Future Hardening*: Preserve this intentionally if the API should stay parameterless; otherwise introduce an explicit admin argument and keep it on the shared guard path.

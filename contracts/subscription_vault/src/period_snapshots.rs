@@ -1,7 +1,8 @@
 use crate::types::{
     BillingPeriodSnapshot, DataKey, Error, BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO,
-    BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD, SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY,
-    SNAPSHOT_FLAG_INTERVAL_CHARGED, SNAPSHOT_FLAG_USAGE_CHARGED,
+    BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD, MAX_BILLING_PERIOD_SNAPSHOTS_PER_SUBSCRIPTION,
+    SNAPSHOT_FLAG_CLOSED, SNAPSHOT_FLAG_EMPTY, SNAPSHOT_FLAG_INTERVAL_CHARGED,
+    SNAPSHOT_FLAG_USAGE_CHARGED,
 };
 use soroban_sdk::{Env, Vec};
 
@@ -84,7 +85,22 @@ pub fn write_period_snapshot(env: &Env, mut snapshot: BillingPeriodSnapshot) -> 
             .persistent()
             .get(&idx_key)
             .unwrap_or_else(|| Vec::new(env));
+        // Evict the oldest entry when inserting would push the count above the
+        // cap (i.e. current length == cap means post-insert length == cap + 1).
+        if idx.len() >= MAX_BILLING_PERIOD_SNAPSHOTS_PER_SUBSCRIPTION {
+            idx.remove(0);
+        }
         idx.push_back(snapshot.period_index);
+
+        while idx.len() > MAX_BILLING_PERIOD_SNAPSHOTS_PER_SUBSCRIPTION {
+            let oldest_period_index = idx.get(0).unwrap();
+            idx.remove(0);
+            env.storage().persistent().remove(&DataKey::BillingPeriodSnapshot(
+                snapshot.subscription_id,
+                oldest_period_index,
+            ));
+        }
+
         env.storage().persistent().set(&idx_key, &idx);
         extend_index_ttl(env, &idx_key);
     }
