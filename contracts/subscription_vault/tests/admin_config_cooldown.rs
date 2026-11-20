@@ -415,7 +415,7 @@ fn governance_proposal_bypasses_cooldown() {
             &admin,
             &None::<Address>,
             &0u32,
-            &5000u32, // 50% quorum
+            &6_700u32, // MIN_QUORUM_BPS (67%)
             &eta,
         )
         .unwrap();

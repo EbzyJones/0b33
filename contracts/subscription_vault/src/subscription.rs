@@ -319,9 +319,19 @@ fn credit_limit_key(subscriber: &Address, token: &Address) -> DataKey {
 }
 
 fn get_subscriber_credit_limit_internal(env: &Env, subscriber: &Address, token: &Address) -> i128 {
+    let now = env.ledger().timestamp();
     env.storage()
         .instance()
-        .get(&credit_limit_key(subscriber, token))
+        .get::<_, crate::types::CreditLimitRecord>(&credit_limit_key(subscriber, token))
+        .map(|rec| {
+            // Treat an expired grant as if no limit were set.
+            if let Some(expires_at) = rec.expires_at {
+                if now >= expires_at {
+                    return 0;
+                }
+            }
+            rec.limit
+        })
         .unwrap_or(0)
 }
 
@@ -3860,9 +3870,11 @@ pub fn get_plan_max_active_subs(env: &Env, plan_template_id: u32) -> u32 {
 pub fn do_set_subscriber_credit_limit(
     env: &Env,
     admin: Address,
+    merchant: Address,
     subscriber: Address,
     token: Address,
     limit: i128,
+    expires_at: Option<u64>,
 ) -> Result<(), Error> {
     super::require_admin_auth(env, &admin)?;
 
@@ -3870,9 +3882,40 @@ pub fn do_set_subscriber_credit_limit(
         return Err(Error::InvalidAmount);
     }
 
+    let record = crate::types::CreditLimitRecord { limit, expires_at };
     env.storage()
         .instance()
-        .set(&credit_limit_key(&subscriber, &token), &limit);
+        .set(&credit_limit_key(&subscriber, &token), &record);
+
+    // Maintain the merchant → (subscriber, token) secondary index so that
+    // list_credit_limits can enumerate all grants without a full contract scan.
+    // The entry is added on first set and left in place on subsequent updates;
+    // setting limit == 0 is the conventional "revoke" path, which removes it.
+    let index_key = DataKey::MerchantCreditLimits(merchant.clone());
+    let mut index: soroban_sdk::Vec<(Address, Address)> = env
+        .storage()
+        .instance()
+        .get(&index_key)
+        .unwrap_or(soroban_sdk::Vec::new(env));
+
+    if limit == 0 {
+        // Revoke: remove the entry from the index.
+        if let Some(pos) = index
+            .iter()
+            .position(|(s, t)| s == subscriber && t == token)
+        {
+            index.remove(pos as u32);
+        }
+    } else {
+        // Add to index only if not already present.
+        let already_indexed = index
+            .iter()
+            .any(|(s, t)| s == subscriber && t == token);
+        if !already_indexed {
+            index.push_back((subscriber.clone(), token.clone()));
+        }
+    }
+    env.storage().instance().set(&index_key, &index);
 
     Ok(())
 }
@@ -3905,8 +3948,11 @@ pub fn do_set_merchant_max_subs(
     Ok(())
 }
 
-pub fn get_subscriber_credit_limit(env: &Env, subscriber: Address, token: Address) -> i128 {
-    get_subscriber_credit_limit_internal(env, &subscriber, &token)
+pub fn get_subscriber_credit_limit(env: &Env, subscriber: Address, token: Address) -> crate::types::CreditLimitRecord {
+    env.storage()
+        .instance()
+        .get::<_, crate::types::CreditLimitRecord>(&credit_limit_key(&subscriber, &token))
+        .unwrap_or(crate::types::CreditLimitRecord { limit: 0, expires_at: None })
 }
 
 pub fn get_subscriber_exposure(

@@ -397,6 +397,9 @@ pub enum DataKey {
     /// lower this value to reclaim ring-buffer slots faster; compliance-
     /// sensitive deployments can raise it for a longer replay-protection window.
     IdempotencyTtlSecs,
+    /// Secondary index: (subscriber, token) pairs that have a credit limit
+    /// under a given merchant. Used by `list_credit_limits`. Discriminant 86.
+    MerchantCreditLimits(Address),
 }
 
 impl DataKey {
@@ -493,6 +496,7 @@ impl DataKey {
             DataKey::MerchantSubAccountList(_) => 83,
             DataKey::DisputeWindowSecs => 84,
             DataKey::IdempotencyTtlSecs => 85,
+            DataKey::MerchantCreditLimits(_) => 86,
         }
     }
 
@@ -569,6 +573,7 @@ pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
     82, // MerchantSubAccount(Address, Symbol)
     83, // MerchantSubAccountList(Address)
     84, // DisputeWindowSecs
+    86, // MerchantCreditLimits(Address)
 ];
 
 /// Returns `true` if `discriminant` is a recognised instance-storage key.
@@ -1627,6 +1632,27 @@ impl Error {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Stored value for a subscriber-level credit limit.
+///
+/// `limit == 0` means "no limit configured". `expires_at == None` means the
+/// grant never expires; `Some(ts)` means it is void after that Unix timestamp.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreditLimitRecord {
+    pub limit: i128,
+    pub expires_at: Option<u64>,
+}
+
+/// One entry returned by `list_credit_limits`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CreditLimitEntry {
+    pub subscriber: Address,
+    pub token: Address,
+    pub limit: i128,
+    pub expires_at: Option<u64>,
+}
+
 pub struct SubscriberCreateWindow {
     pub start_ts: u64,
     pub count: u32,

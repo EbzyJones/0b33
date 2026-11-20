@@ -761,7 +761,7 @@ pub use subscription::compute_cancel_refund;
 pub use blocklist::{BlocklistAddedEvent, BlocklistEntry, BlocklistRemovedEvent};
 pub use queries::{
     compute_next_charge_info, generate_reconciliation_proof, get_contract_reconciliation_summary,
-    get_token_reconciliation, query_prepaid_balances_paginated, MAX_PREPAID_SCAN_DEPTH,
+    get_token_reconciliation, list_credit_limits, query_prepaid_balances_paginated, MAX_PREPAID_SCAN_DEPTH,
     MAX_MERCHANT_CURSOR_DEPTH, MAX_SCAN_DEPTH, MAX_SUBSCRIPTION_LIST_PAGE,
     MAX_TOKEN_SUMMARIES_PER_PAGE,
 };
@@ -839,6 +839,7 @@ pub use types::{
     SUBSCRIPTION_AUTO_PAUSED_EVENT_SCHEMA_VERSION,
     SUBSCRIPTION_CHARGED_EVENT_SCHEMA_VERSION, SUBSCRIPTION_CHARGE_FAILED_EVENT_SCHEMA_VERSION,
     SUBSCRIPTION_EXPIRED_EVENT_SCHEMA_VERSION, SUBSCRIPTION_PAUSED_EVENT_SCHEMA_VERSION,
+    CreditLimitEntry, CreditLimitRecord,
     PauseInitiatorRole,
 };
 
@@ -2257,16 +2258,26 @@ impl SubscriptionVault {
     pub fn set_subscriber_credit_limit(
         env: Env,
         admin: Address,
+        merchant: Address,
         subscriber: Address,
         token: Address,
         limit: i128,
+        expires_at: Option<u64>,
     ) -> Result<(), Error> {
-        subscription::do_set_subscriber_credit_limit(&env, admin, subscriber, token, limit)
+        subscription::do_set_subscriber_credit_limit(&env, admin, merchant, subscriber, token, limit, expires_at)
     }
 
-    /// Get subscriber credit limit.
-    pub fn get_subscriber_credit_limit(env: Env, subscriber: Address, token: Address) -> i128 {
+    /// Get subscriber credit limit record (limit and optional expiry).
+    pub fn get_subscriber_credit_limit(env: Env, subscriber: Address, token: Address) -> types::CreditLimitRecord {
         subscription::get_subscriber_credit_limit(&env, subscriber, token)
+    }
+
+    /// List all currently-active credit-limit grants issued under `merchant`.
+    ///
+    /// Returns grants with `limit > 0` that have not yet expired, in insertion
+    /// order. An empty vec means no active grants exist for this merchant.
+    pub fn list_credit_limits(env: Env, merchant: Address) -> Vec<types::CreditLimitEntry> {
+        queries::list_credit_limits(&env, merchant)
     }
 
     /// Set (or clear, with `cap = None`) an admin override of a subscriber's
@@ -3478,6 +3489,20 @@ impl SubscriptionVault {
         limit: u32,
     ) -> Result<Vec<Subscription>, Error> {
         queries::get_subscriptions_by_token(&env, token, start, limit)
+    }
+
+    /// List subscriber subscriptions.
+    ///
+    /// `offset` is a 0-based index into the subscriber's subscription list and
+    /// `limit` must be in `1..=MAX_SUBSCRIPTION_LIST_PAGE`. Results follow
+    /// insertion order (ascending subscription ID).
+    pub fn get_subscriptions_by_subscriber(
+        env: Env,
+        subscriber: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<Subscription>, Error> {
+        queries::get_subscriptions_by_subscriber(&env, subscriber, offset, limit)
     }
 
     /// List subscriptions indexed under a settlement token with cursor pagination.

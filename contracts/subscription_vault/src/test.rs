@@ -1246,6 +1246,54 @@ fn test_charge_zero_amount_subscription_returns_invalid_amount() {
     );
 }
 
+// Issue #596: a zero interval_seconds bypasses IntervalNotElapsed and allows
+// the subscription to be charged on every ledger.  charge_one must reject it
+// with InvalidInput before any next_charge_time call.
+#[test]
+fn test_charge_zero_interval_subscription_returns_invalid_input() {
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
+
+    let (id, _, _) = fixtures::create_subscription_detailed(
+        &test_env.env,
+        &test_env.client,
+        SubscriptionStatus::Active,
+        AMOUNT,
+        INTERVAL,
+    );
+    // Patch interval_seconds to 0 directly in storage to simulate a bypass
+    // of creation-time validation (the scenario described in issue #596).
+    test_env.env.as_contract(&test_env.client.address, || {
+        let mut sub: crate::Subscription = test_env
+            .env
+            .storage()
+            .persistent()
+            .get(&DataKey::Sub(id))
+            .unwrap();
+        sub.interval_seconds = 0;
+        test_env
+            .env
+            .storage()
+            .persistent()
+            .set(&DataKey::Sub(id), &sub);
+    });
+    // Fund prepaid balance so the charge is not blocked by InsufficientBalance.
+    seed_balance(&test_env.env, &test_env.client, id, PREPAID);
+
+    let result = test_env
+        .client
+        .try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+
+    // Expect InvalidInput (error code 3002).
+    assert_eq!(result, Err(Ok(Error::InvalidInput)));
+
+    // The prepaid balance must be untouched — no accounting ran.
+    assert_eq!(
+        test_env.client.get_subscription(&id).prepaid_balance,
+        PREPAID
+    );
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #6001)")]
 fn test_subscription_limit_reached() {
@@ -3268,9 +3316,11 @@ fn test_subscriber_credit_limit_blocks_new_subscription_creation() {
     // Limit total exposure for this subscriber/token to a single interval amount.
     test_env.client.set_subscriber_credit_limit(
         &test_env.admin,
+        &merchant,
         &subscriber,
         &test_env.token,
         &AMOUNT,
+        &None::<u64>,
     );
 
     // First subscription fits entirely within the limit.
@@ -3297,9 +3347,12 @@ fn test_subscriber_credit_limit_blocks_topup_when_exposure_exceeds_limit() {
     let limit = AMOUNT + 5_000_000i128;
     test_env.client.set_subscriber_credit_limit(
         &test_env.admin,
+        &merchant,
         &subscriber,
         &test_env.token,
         &limit,
+        &None::<u64>,
+    );
     );
 
     let sub_id = test_env.client.create_subscription(
@@ -3335,14 +3388,16 @@ fn test_get_subscriber_credit_limit_and_exposure_views() {
         test_env
             .client
             .get_subscriber_credit_limit(&subscriber, &test_env.token),
-        0
+        crate::types::CreditLimitRecord { limit: 0, expires_at: None }
     );
 
     test_env.client.set_subscriber_credit_limit(
         &test_env.admin,
+        &merchant,
         &subscriber,
         &test_env.token,
         &(AMOUNT * 10),
+        &None::<u64>,
     );
 
     // After creating a subscription, exposure reflects one interval liability and zero prepaid.
@@ -3365,6 +3420,189 @@ fn test_get_subscriber_credit_limit_and_exposure_views() {
         .client
         .get_subscriber_exposure(&subscriber, &test_env.token);
     assert_eq!(exposure_after_topup, AMOUNT + 5_000_000i128);
+}
+
+// ── Credit limit: expires_at and list_credit_limits (issue #593) ─────────────
+
+#[test]
+fn test_credit_limit_expires_at_enforced() {
+    // A grant with expires_at in the past is treated as "no limit" (limit = 0).
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    test_env.env.ledger().with_mut(|li| li.timestamp = 1_000);
+
+    // Set a limit that has already expired.
+    test_env.client.set_subscriber_credit_limit(
+        &test_env.admin,
+        &merchant,
+        &subscriber,
+        &test_env.token,
+        &AMOUNT,
+        &Some(500u64), // expires_at = 500, now = 1_000 → already expired
+    );
+
+    // The returned record reflects the stored value.
+    let rec = test_env.client.get_subscriber_credit_limit(&subscriber, &test_env.token);
+    assert_eq!(rec.limit, AMOUNT);
+    assert_eq!(rec.expires_at, Some(500u64));
+
+    // But enforcement treats it as no limit — a subscription can be created freely.
+    let _sub = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    // And a second one (which would exceed the stated limit if it were active).
+    let res = test_env.client.try_create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    // No CreditLimitExceeded because the grant is expired.
+    assert!(res.is_ok(), "expired grant must not block subscription creation");
+}
+
+#[test]
+fn test_credit_limit_expires_at_future_enforced() {
+    // A grant with expires_at in the future is active and enforced normally.
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+
+    test_env.env.ledger().with_mut(|li| li.timestamp = 1_000);
+
+    test_env.client.set_subscriber_credit_limit(
+        &test_env.admin,
+        &merchant,
+        &subscriber,
+        &test_env.token,
+        &AMOUNT,            // limit = one interval amount
+        &Some(9_999_999u64), // expires in the far future
+    );
+
+    // First subscription fits.
+    let _sub = test_env.client.create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    // Second would exceed the still-active limit.
+    let res = test_env.client.try_create_subscription(
+        &subscriber,
+        &merchant,
+        &AMOUNT,
+        &INTERVAL,
+        &false,
+        &None::<i128>,
+        &None::<u64>,
+        &None::<u32>,
+    );
+    assert_eq!(res, Err(Ok(Error::CreditLimitExceeded)));
+}
+
+#[test]
+fn test_list_credit_limits_returns_active_grants() {
+    let test_env = TestEnv::default();
+    let merchant = Address::generate(&test_env.env);
+    let sub_a = Address::generate(&test_env.env);
+    let sub_b = Address::generate(&test_env.env);
+
+    test_env.env.ledger().with_mut(|li| li.timestamp = 1_000);
+
+    // Grant two limits under the same merchant.
+    test_env.client.set_subscriber_credit_limit(
+        &test_env.admin,
+        &merchant,
+        &sub_a,
+        &test_env.token,
+        &1_000i128,
+        &None::<u64>,
+    );
+    test_env.client.set_subscriber_credit_limit(
+        &test_env.admin,
+        &merchant,
+        &sub_b,
+        &test_env.token,
+        &2_000i128,
+        &Some(9_999_999u64),
+    );
+
+    let entries = test_env.client.list_credit_limits(&merchant);
+    assert_eq!(entries.len(), 2);
+    // Insertion order: sub_a first.
+    assert_eq!(entries.get(0).unwrap().subscriber, sub_a);
+    assert_eq!(entries.get(0).unwrap().limit, 1_000i128);
+    assert_eq!(entries.get(1).unwrap().subscriber, sub_b);
+    assert_eq!(entries.get(1).unwrap().limit, 2_000i128);
+}
+
+#[test]
+fn test_list_credit_limits_excludes_revoked_and_expired() {
+    let test_env = TestEnv::default();
+    let merchant = Address::generate(&test_env.env);
+    let sub_a = Address::generate(&test_env.env);
+    let sub_b = Address::generate(&test_env.env);
+    let sub_c = Address::generate(&test_env.env);
+
+    test_env.env.ledger().with_mut(|li| li.timestamp = 1_000);
+
+    // sub_a: active grant.
+    test_env.client.set_subscriber_credit_limit(
+        &test_env.admin,
+        &merchant,
+        &sub_a,
+        &test_env.token,
+        &5_000i128,
+        &None::<u64>,
+    );
+    // sub_b: revoked (limit = 0).
+    test_env.client.set_subscriber_credit_limit(
+        &test_env.admin,
+        &merchant,
+        &sub_b,
+        &test_env.token,
+        &0i128,
+        &None::<u64>,
+    );
+    // sub_c: expired.
+    test_env.client.set_subscriber_credit_limit(
+        &test_env.admin,
+        &merchant,
+        &sub_c,
+        &test_env.token,
+        &3_000i128,
+        &Some(500u64), // already expired at now = 1_000
+    );
+
+    let entries = test_env.client.list_credit_limits(&merchant);
+    // Only sub_a should appear.
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries.get(0).unwrap().subscriber, sub_a);
+}
+
+#[test]
+fn test_list_credit_limits_empty_for_unknown_merchant() {
+    let test_env = TestEnv::default();
+    let unknown_merchant = Address::generate(&test_env.env);
+    let entries = test_env.client.list_credit_limits(&unknown_merchant);
+    assert_eq!(entries.len(), 0);
 }
 
 #[test]
@@ -4655,6 +4893,96 @@ fn test_list_subscriptions_by_subscriber_pagination_stable_ordering() {
     assert_eq!(page2.subscription_ids.get(0).unwrap(), expected[2]);
     assert_eq!(page2.subscription_ids.get(2).unwrap(), expected[4]);
     assert!(page2.next_start_id.is_none());
+}
+
+// ── get_subscriptions_by_subscriber ──────────────────────────────────────────
+
+#[test]
+fn test_get_subscriptions_by_subscriber_returns_records() {
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    // Create three subscriptions for this subscriber.
+    for _ in 0..3 {
+        test_env.client.create_subscription(
+            &subscriber,
+            &merchant,
+            &AMOUNT,
+            &INTERVAL,
+            &false,
+            &None::<i128>,
+            &None::<u64>,
+            &None::<u32>,
+        );
+    }
+    let result = test_env
+        .client
+        .get_subscriptions_by_subscriber(&subscriber, &0, &10);
+    assert_eq!(result.len(), 3);
+    // Every returned record must belong to this subscriber.
+    for sub in result.iter() {
+        assert_eq!(sub.subscriber, subscriber);
+    }
+}
+
+#[test]
+fn test_get_subscriptions_by_subscriber_offset_pagination() {
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let merchant = Address::generate(&test_env.env);
+    let mut ids = alloc::vec::Vec::new();
+    for _ in 0..5 {
+        let id = test_env.client.create_subscription(
+            &subscriber,
+            &merchant,
+            &AMOUNT,
+            &INTERVAL,
+            &false,
+            &None::<i128>,
+            &None::<u64>,
+            &None::<u32>,
+        );
+        ids.push(id);
+    }
+
+    // First page: offset=0, limit=2 → first two subscriptions.
+    let page1 = test_env
+        .client
+        .get_subscriptions_by_subscriber(&subscriber, &0, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap().subscriber, subscriber);
+
+    // Second page: offset=2, limit=10 → remaining three.
+    let page2 = test_env
+        .client
+        .get_subscriptions_by_subscriber(&subscriber, &2, &10);
+    assert_eq!(page2.len(), 3);
+
+    // Offset past the end returns empty.
+    let empty = test_env
+        .client
+        .get_subscriptions_by_subscriber(&subscriber, &100, &10);
+    assert_eq!(empty.len(), 0);
+}
+
+#[test]
+fn test_get_subscriptions_by_subscriber_limit_zero_errors() {
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let result = test_env
+        .client
+        .try_get_subscriptions_by_subscriber(&subscriber, &0, &0u32);
+    assert_eq!(result, Err(Ok(Error::InvalidInput)));
+}
+
+#[test]
+fn test_get_subscriptions_by_subscriber_no_subscriptions_returns_empty() {
+    let test_env = TestEnv::default();
+    let subscriber = Address::generate(&test_env.env);
+    let result = test_env
+        .client
+        .get_subscriptions_by_subscriber(&subscriber, &0, &10);
+    assert_eq!(result.len(), 0);
 }
 
 #[test]
@@ -6784,8 +7112,10 @@ fn test_admin_authorization_matrix_rejects_non_admin_across_protected_entrypoint
         test_env.client.try_set_subscriber_credit_limit(
             &stranger,
             &subscriber,
+            &subscriber,
             &test_env.token,
-        &AMOUNT
+        &AMOUNT,
+        &None::<u64>
         ),
         Err(Ok(Error::Forbidden))
     );
@@ -6897,8 +7227,10 @@ fn test_admin_authorization_matrix_rejects_stale_admin_after_rotation() {
         test_env.client.try_set_subscriber_credit_limit(
             &test_env.admin,
             &subscriber,
+            &subscriber,
             &test_env.token,
-        &AMOUNT
+        &AMOUNT,
+        &None::<u64>
         ),
         Err(Ok(Error::Forbidden))
     );

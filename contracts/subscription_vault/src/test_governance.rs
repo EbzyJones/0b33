@@ -28,7 +28,7 @@ fn admin_rotation_invalidates_old_governance_proposals() {
 		&admin,
 		&None::<Address>,
 		&1u32,
-		&5_000u32,
+		&6_700u32,
 		&old_eta,
 	);
 	client.vote_proposal(&stale_id, &true, &0u64);
@@ -50,7 +50,7 @@ fn admin_rotation_invalidates_old_governance_proposals() {
 		&new_admin,
 		&None::<Address>,
 		&1u32,
-		&5_000u32,
+		&6_700u32,
 		&fresh_eta,
 	);
 	client.vote_proposal(&fresh_id, &true, &0u64);
@@ -83,7 +83,7 @@ fn direct_admin_rotation_invalidates_outstanding_proposals() {
 		&admin,
 		&None::<Address>,
 		&1u32,
-		&5_000u32,
+		&6_700u32,
 		&eta,
 	);
 
@@ -151,7 +151,7 @@ fn set_protocol_fee_proposal_rejects_fee_too_high() {
 		&admin,
 		&Some(treasury),
 		&(MAX_PROTOCOL_FEE_BIPS + 1),
-		&5_000u32,
+		&6_700u32,
 		&eta,
 	);
 
@@ -178,7 +178,7 @@ fn set_protocol_fee_proposal_rejects_missing_treasury() {
 		&admin,
 		&None::<Address>,
 		&250u32, // Valid fee (5%)
-		&5_000u32,
+		&6_700u32,
 		&eta,
 	);
 
@@ -206,7 +206,7 @@ fn set_protocol_fee_proposal_accepts_valid_config() {
 		&admin,
 		&Some(treasury),
 		&MAX_PROTOCOL_FEE_BIPS,
-		&5_000u32,
+		&6_700u32,
 		&eta,
 	);
 
@@ -235,7 +235,7 @@ fn set_dispute_window_proposal_rejects_zero_window() {
 		&admin,
 		&None::<Address>,
 		&0u32,
-		&5_000u32,
+		&6_700u32,
 		&eta,
 	);
 
@@ -262,7 +262,7 @@ fn set_dispute_window_proposal_rejects_max_u32_window() {
 		&admin,
 		&None::<Address>,
 		&u32::MAX,
-		&5_000u32,
+		&6_700u32,
 		&eta,
 	);
 
@@ -289,7 +289,7 @@ fn set_dispute_window_proposal_accepts_valid_config() {
 		&admin,
 		&None::<Address>,
 		&(7 * 24 * 60 * 60u32),
-		&5_000u32,
+		&6_700u32,
 		&eta,
 	);
 
@@ -318,7 +318,7 @@ fn set_dispute_window_proposal_rejects_below_minimum() {
 		&admin,
 		&None::<Address>,
 		&(23 * 60 * 60u32),
-		&5_000u32,
+		&6_700u32,
 		&eta,
 	);
 
@@ -345,10 +345,112 @@ fn set_dispute_window_proposal_rejects_above_maximum() {
 		&admin,
 		&None::<Address>,
 		&(91 * 24 * 60 * 60u32),
-		&5_000u32,
+		&6_700u32,
 		&eta,
 	);
 
+	assert_eq!(result, Err(Ok(Error::InvalidInput)));
+}
+
+// ── Quorum floor validation at submission time (issue #594) ──────────────────
+
+#[test]
+fn submit_proposal_rejects_quorum_below_minimum() {
+	let env = Env::default();
+	env.mock_all_auths();
+	let contract_id = env.register(SubscriptionVault, ());
+	let client = SubscriptionVaultClient::new(&env, &contract_id);
+	let admin = Address::generate(&env);
+	let token = env
+		.register_stellar_asset_contract_v2(admin.clone())
+		.address();
+	client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+	client.add_guardian(&admin, &admin, &1u32);
+
+	let eta = env.ledger().timestamp() + 3 * 24 * 60 * 60;
+	let target = Address::generate(&env);
+
+	// quorum_bps = 1_000 (10%) is below MIN_QUORUM_BPS (6_700) — must be rejected.
+	let result = client.try_submit_proposal(
+		&ProposalKind::EmergencyStop,
+		&target,
+		&None::<Address>,
+		&1u32,
+		&1_000u32,
+		&eta,
+	);
+	assert_eq!(result, Err(Ok(Error::InvalidInput)));
+
+	// quorum_bps = 0 is also below the floor.
+	let result = client.try_submit_proposal(
+		&ProposalKind::EmergencyStop,
+		&target,
+		&None::<Address>,
+		&1u32,
+		&0u32,
+		&eta,
+	);
+	assert_eq!(result, Err(Ok(Error::InvalidInput)));
+
+	// quorum_bps = MIN_QUORUM_BPS - 1 (6_699) is still below the floor.
+	let result = client.try_submit_proposal(
+		&ProposalKind::EmergencyStop,
+		&target,
+		&None::<Address>,
+		&1u32,
+		&6_699u32,
+		&eta,
+	);
+	assert_eq!(result, Err(Ok(Error::InvalidInput)));
+}
+
+#[test]
+fn submit_proposal_accepts_quorum_at_minimum() {
+	let env = Env::default();
+	env.mock_all_auths();
+	let contract_id = env.register(SubscriptionVault, ());
+	let client = SubscriptionVaultClient::new(&env, &contract_id);
+	let admin = Address::generate(&env);
+	let token = env
+		.register_stellar_asset_contract_v2(admin.clone())
+		.address();
+	client.init(&token, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
+	client.add_guardian(&admin, &admin, &1u32);
+
+	let eta = env.ledger().timestamp() + 3 * 24 * 60 * 60;
+	let target = Address::generate(&env);
+
+	// quorum_bps = 6_700 (MIN_QUORUM_BPS) is the boundary — must be accepted.
+	let result = client.try_submit_proposal(
+		&ProposalKind::EmergencyStop,
+		&target,
+		&None::<Address>,
+		&1u32,
+		&6_700u32,
+		&eta,
+	);
+	assert!(result.is_ok());
+
+	// quorum_bps = 10_000 (100%) is the maximum — must be accepted.
+	let result = client.try_submit_proposal(
+		&ProposalKind::EmergencyStop,
+		&target,
+		&None::<Address>,
+		&1u32,
+		&10_000u32,
+		&eta,
+	);
+	assert!(result.is_ok());
+
+	// quorum_bps = 10_001 exceeds 10_000 — must be rejected.
+	let result = client.try_submit_proposal(
+		&ProposalKind::EmergencyStop,
+		&target,
+		&None::<Address>,
+		&1u32,
+		&10_001u32,
+		&eta,
+	);
 	assert_eq!(result, Err(Ok(Error::InvalidInput)));
 }
 
@@ -729,7 +831,7 @@ mod vote_lock_during_timelock {
             &target,
             &None,
             &0,
-            &5000,
+            &6700,
             &eta,
         );
 
@@ -759,7 +861,7 @@ mod vote_lock_during_timelock {
             &target,
             &None,
             &0,
-            &5000,
+            &6700,
             &eta,
         );
 
@@ -792,7 +894,7 @@ mod vote_lock_during_timelock {
             &target,
             &None,
             &0,
-            &5000,
+            &6700,
             &eta,
         );
 
@@ -832,7 +934,7 @@ mod vote_lock_during_timelock {
             &target,
             &None,
             &0,
-            &5000, // 50% quorum needed
+            &6700, // MIN_QUORUM_BPS (67%)
             &eta,
         );
 
@@ -866,7 +968,7 @@ mod vote_lock_during_timelock {
             &target,
             &None,
             &0,
-            &5000,
+            &6700,
             &eta,
         );
 
@@ -900,7 +1002,7 @@ mod vote_lock_during_timelock {
             &target,
             &None,
             &0,
-            &5000,
+            &6700,
             &eta,
         );
 
@@ -934,7 +1036,7 @@ mod vote_lock_during_timelock {
             &target,
             &None,
             &0,
-            &5000,
+            &6700,
             &eta,
         );
 
@@ -968,7 +1070,7 @@ mod vote_lock_during_timelock {
             &target,
             &None,
             &0,
-            &5000,
+            &6700,
             &eta,
         );
 
@@ -1299,7 +1401,7 @@ mod cancel_proposal_authorisation {
             &target,
             &None,
             &1u32,
-            &5_000u32,
+            &6_700u32,
             &eta,
         )
     }

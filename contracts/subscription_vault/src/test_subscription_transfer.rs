@@ -96,7 +96,7 @@ fn test_transfer_rechecks_new_subscriber_credit_limit() {
     client.create_subscription_with_token(
         &sub2, &merchant, &token, &10_000, &86400, &false, &None, &None,
     );
-    client.set_subscriber_credit_limit(&admin, &sub2, &token, &15_000);
+    client.set_subscriber_credit_limit(&admin, &merchant, &sub2, &token, &15_000, &None::<u64>);
 
     let expires_at = env.ledger().timestamp() + 3600;
     client.initiate_transfer(&incoming_id, &sub1, &sub2, &expires_at);
@@ -104,7 +104,7 @@ fn test_transfer_rechecks_new_subscriber_credit_limit() {
     assert_eq!(rejected, Err(Ok(Error::CreditLimitExceeded)));
     assert_eq!(client.get_subscription(&incoming_id).subscriber, sub1);
 
-    client.set_subscriber_credit_limit(&admin, &sub2, &token, &100_000);
+    client.set_subscriber_credit_limit(&admin, &merchant, &sub2, &token, &100_000, &None::<u64>);
     client.accept_transfer(&incoming_id, &sub2);
     assert_eq!(client.get_subscription(&incoming_id).subscriber, sub2);
 }

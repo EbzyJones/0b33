@@ -417,7 +417,7 @@ fn test_deposit_on_behalf_credit_limit_respected() {
     let (env, client, subscriber, merchant, payer, token) = setup();
     let sub_id = create_sub(&env, &client, &subscriber, &merchant, &token);
 
-    client.set_subscriber_credit_limit(&subscriber, &subscriber, &token, &20_000);
+    client.set_subscriber_credit_limit(&subscriber, &merchant, &subscriber, &token, &20_000, &None::<u64>);
 
     let expires_at = env.ledger().timestamp() + 3600;
     client.grant_delegated_payer(&subscriber, &payer, &expires_at, &100_000);

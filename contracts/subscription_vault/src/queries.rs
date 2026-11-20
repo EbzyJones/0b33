@@ -26,8 +26,10 @@
 //! | `get_cap_info` | Lifetime cap / charged totals | ✅ Yes | None |
 //! | `get_plan_max_active_subs` | Per-plan active-subscription limit | ✅ Yes | None |
 //! | `get_merchant_max_subs` | Per-merchant active-subscription limit | ✅ Yes | None |
+//! | `get_subscriptions_by_subscriber` | Slice of subscription records | ✅ Yes | None |
 //! | `list_subscriptions_by_subscriber` | Paginated subscription IDs | ✅ Yes | None |
 //! | `list_recoverable_subscriptions` | Paginated stranded (cancelled + non-zero prepaid) subscriptions | ✅ Yes | None |
+//! | `list_credit_limits` | Active credit-limit grants for a merchant | ✅ Yes | None |
 //! | `get_token_reconciliation` | Accounting totals for a token (no secrets) | ✅ Yes | None — balance totals are public; no admin credential exposed |
 //! | `get_contract_reconciliation_summary` | Multi-token accounting summaries | ✅ Yes | None |
 //! | `generate_reconciliation_proof` | Auditable accounting snapshot | ✅ Yes | None |
@@ -539,6 +541,47 @@ pub struct SubscriptionsPage {
     pub next_start_id: Option<u32>,
 }
 
+/// Returns subscription records for a given subscriber, paginated by offset into
+/// the subscriber's subscription index.
+///
+/// `offset` is a 0-based index into the subscriber's `SubscriberSubs` list.
+/// Returns at most `limit` records in stable insertion order (ascending subscription
+/// ID). If `offset` is at or past the end of the list, an empty `Vec` is returned.
+///
+/// `limit` must be in `1..=MAX_SUBSCRIPTION_LIST_PAGE`; returns
+/// [`Error::InvalidInput`] otherwise.
+///
+/// Missing subscription records (removed from persistent storage but still present
+/// in the index) are silently skipped, so the returned `Vec` may be shorter than
+/// `limit` even before the end of the index.
+pub fn get_subscriptions_by_subscriber(
+    env: &Env,
+    subscriber: Address,
+    offset: u32,
+    limit: u32,
+) -> Result<Vec<Subscription>, Error> {
+    if limit == 0 || limit > MAX_SUBSCRIPTION_LIST_PAGE {
+        return Err(Error::InvalidInput);
+    }
+    let ids: Vec<u32> = env
+        .storage()
+        .instance()
+        .get(&DataKey::SubscriberSubs(subscriber))
+        .unwrap_or(Vec::new(env));
+    let len = ids.len();
+    if offset >= len {
+        return Ok(Vec::new(env));
+    }
+    let end = (offset + limit).min(len);
+    let mut out = Vec::new(env);
+    for id in ids.iter().skip(offset as usize).take((end - offset) as usize) {
+        if let Some(sub) = read_subscription(env, id) {
+            out.push_back(sub);
+        }
+    }
+    Ok(out)
+}
+
 /// Get all subscription IDs for a given subscriber with pagination support.
 ///
 /// ## Complexity
@@ -612,6 +655,58 @@ pub fn list_subscriptions_by_subscriber(
         subscription_ids,
         next_start_id,
     })
+}
+
+/// Returns all active credit-limit grants issued under `merchant`.
+///
+/// Reads the `MerchantCreditLimits` secondary index maintained by
+/// `do_set_subscriber_credit_limit`. Grants with `limit == 0` (revoked) are
+/// excluded; expired grants (where `expires_at <= now`) are also excluded so
+/// only currently-enforceable limits are returned.
+///
+/// Results are in insertion order (oldest grant first). An empty `Vec` means
+/// no grants are currently active for this merchant.
+///
+/// Unauthenticated — credit limit entries are observable from public
+/// state; no admin secret or timelock is exposed.
+pub fn list_credit_limits(
+    env: &Env,
+    merchant: Address,
+) -> Vec<crate::types::CreditLimitEntry> {
+    let now = env.ledger().timestamp();
+    let index_key = DataKey::MerchantCreditLimits(merchant);
+    let index: Vec<(Address, Address)> = env
+        .storage()
+        .instance()
+        .get(&index_key)
+        .unwrap_or(Vec::new(env));
+
+    let mut out = Vec::new(env);
+    for (subscriber, token) in index.iter() {
+        let key = DataKey::CreditLimit(subscriber.clone(), token.clone());
+        if let Some(rec) = env
+            .storage()
+            .instance()
+            .get::<_, crate::types::CreditLimitRecord>(&key)
+        {
+            // Skip revoked (limit == 0) and expired grants.
+            if rec.limit == 0 {
+                continue;
+            }
+            if let Some(exp) = rec.expires_at {
+                if now >= exp {
+                    continue;
+                }
+            }
+            out.push_back(crate::types::CreditLimitEntry {
+                subscriber: subscriber.clone(),
+                token: token.clone(),
+                limit: rec.limit,
+                expires_at: rec.expires_at,
+            });
+        }
+    }
+    out
 }
 
 /// One entry of a [`RecoverableSubscriptionsPage`] page.
