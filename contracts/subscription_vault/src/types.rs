@@ -1492,6 +1492,8 @@ pub enum Error {
     CouponAlreadyApplied = 6016,
     /// Coupon token does not match the subscription's settlement token.
     CouponTokenMismatch = 6017,
+    /// Coupon percentage discount exceeds the 10000-basis-point maximum.
+    CouponDiscountTooHigh = 6020,
     /// Too many subscriptions were created by this subscriber within the
     /// current rate window.
     SubscriberRateLimited = 6018,
@@ -2639,6 +2641,19 @@ pub struct BatchSizeWarningEvent {
 pub struct ChargeFailureEvent {
     pub subscription_id: u32,
     pub error_code: u32,
+    pub attempted_amount: i128,
+    pub ledger: u64,
+    pub schema_version: u32,
+    pub batch_nonce: Option<u64>,
+    pub contract_id: Address,
+}
+
+/// Dedicated observability event emitted when a charge is rejected because
+/// the idempotency ring has no live slot available.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct IdemBufferExhaustedEvent {
+    pub subscription_id: u32,
     pub attempted_amount: i128,
     pub ledger: u64,
     pub schema_version: u32,
