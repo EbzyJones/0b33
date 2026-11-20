@@ -24,12 +24,11 @@ const MIN_TIMELOCK_DELAY: u64 = 2 * 24 * 60 * 60; // 172800 seconds
 
 /// Floor applied to `quorum_bps` when a proposal is executed.
 ///
-/// [`do_submit_proposal`] only rejects `quorum_bps > 10_000`, so a proposal can
-/// legally be created with `quorum_bps = 0`. Without a floor that would let a
+/// [`do_submit_proposal`] rejects `quorum_bps` outside `MIN_QUORUM_BPS..=10_000`,
+/// so the stated quorum is always the enforced quorum. Without a floor that would let a
 /// single guardian vote execute a privileged operation such as admin rotation
-/// or a treasury change. Execution therefore uses
-/// `proposal.quorum_bps.max(MIN_QUORUM_BPS)`, so the effective quorum can never
-/// fall below two thirds of the current total guardian weight.
+/// or a treasury change. Execution therefore uses `proposal.quorum_bps` directly,
+/// which is guaranteed to be at least `MIN_QUORUM_BPS`.
 ///
 /// 6 700 bps (67%) is the quorum used by every worked example in
 /// `docs/governance_proposals.md`.
@@ -195,7 +194,7 @@ fn validate_proposal_config(
 ///
 /// # Errors
 /// - `Unauthorized` if the caller is not a guardian with weight > 0.
-/// - `InvalidInput` if quorum_bps is invalid (> 10000).
+/// - `InvalidInput` if quorum_bps is outside `MIN_QUORUM_BPS..=10_000`.
 /// - `InvalidInput` if eta does not satisfy: eta >= created_at + MIN_TIMELOCK_DELAY.
 /// - `EmergencyStopActive` if emergency stop is enabled.
 pub fn do_submit_proposal(
@@ -207,7 +206,7 @@ pub fn do_submit_proposal(
     quorum_bps: u32,
     eta: u64,
 ) -> Result<u64, Error> {
-    if quorum_bps > 10_000 {
+    if quorum_bps < MIN_QUORUM_BPS || quorum_bps > 10_000 {
         return Err(Error::InvalidInput);
     }
 
@@ -376,11 +375,11 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
         return Err(Error::InvalidInput);
     }
 
-    // Calculate quorum. The effective quorum is never below `MIN_QUORUM_BPS`,
-    // even if the proposal was submitted with a lower `quorum_bps`.
+    // Calculate quorum. Because do_submit_proposal now requires
+    // quorum_bps >= MIN_QUORUM_BPS, the stored value is always at or above the floor.
     let (votes_for, votes_against) = calculate_quorum(env, &proposal);
     let total_weight = calculate_total_weight(env);
-    let effective_quorum_bps = proposal.quorum_bps.max(MIN_QUORUM_BPS);
+    let effective_quorum_bps = proposal.quorum_bps;
 
     let required_votes = (total_weight as u128)
         .checked_mul(effective_quorum_bps as u128)

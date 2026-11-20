@@ -274,7 +274,7 @@ impl FuzzHarness {
                 std::format!("{:?}", self.client.try_remove_accepted_token(&address, &other_token))
             }
             Operation::SetSubscriberCreditLimit => {
-                std::format!("{:?}", self.client.try_set_subscriber_credit_limit(&address, &self.subscriber, &self.token, &100_000_000))
+                std::format!("{:?}", self.client.try_set_subscriber_credit_limit(&address, &self.merchant, &self.subscriber, &self.token, &100_000_000, &None::<u64>))
             }
             Operation::ExportContractSnapshot => {
                 std::format!("{:?}", self.client.try_export_contract_snapshot(&address))

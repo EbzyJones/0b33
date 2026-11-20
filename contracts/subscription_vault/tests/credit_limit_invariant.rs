@@ -246,7 +246,7 @@ fn run_sequence(seed: u64) {
 
                 let before = h.client.get_subscriber_exposure(&h.subscriber, &h.token);
                 h.client
-                    .set_subscriber_credit_limit(&h.admin, &h.subscriber, &h.token, &new_limit);
+                    .set_subscriber_credit_limit(&h.admin, &h.merchant, &h.subscriber, &h.token, &new_limit, &None::<u64>);
                 model.limit = new_limit;
 
                 // Invariant (3): changing the limit never claws back exposure,
@@ -390,7 +390,7 @@ fn limit_shrink_below_exposure_has_no_clawback() {
 
     // Shrink the limit far below current exposure.
     h.client
-        .set_subscriber_credit_limit(&h.admin, &h.subscriber, &h.token, &1i128);
+        .set_subscriber_credit_limit(&h.admin, &h.merchant, &h.subscriber, &h.token, &1i128, &None::<u64>);
 
     // No claw-back: exposure and the existing subscription are untouched.
     assert_eq!(
@@ -480,7 +480,7 @@ fn exposure_is_isolated_per_token() {
 
     // A limit on token A does not constrain token B.
     h.client
-        .set_subscriber_credit_limit(&h.admin, &h.subscriber, &h.token, &10_000i128);
+        .set_subscriber_credit_limit(&h.admin, &h.merchant, &h.subscriber, &h.token, &10_000i128, &None::<u64>);
 
     // Token A is at its limit: a further token-A subscription is rejected...
     let blocked = h.client.try_create_subscription(

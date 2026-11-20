@@ -232,6 +232,20 @@ pub fn charge_one(
         ));
     }
 
+    // A zero interval_seconds makes next_charge_time == last_charged_at,
+    // so IntervalNotElapsed never fires and the subscription can be charged
+    // on every ledger, draining the prepaid balance in a single block.
+    // Reject before any next_charge_time call.
+    if sub.interval_seconds == 0 {
+        return Err(charge_fail(
+            env,
+            subscription_id,
+            Error::InvalidInput,
+            0,
+            now,
+        ));
+    }
+
 
     // Merchant pause/vacation status — cached per merchant within a batch so
     // subscriptions sharing a merchant don't each re-read the same storage.

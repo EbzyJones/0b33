@@ -136,12 +136,12 @@ fn test_deposit_insufficient_partial_balance_reverts() {
 #[test]
 fn test_deposit_rejected_when_credit_limit_exceeded() {
     let (env, client, token, admin) = setup();
-    let (id, subscriber, _) = create_sub(&env, &client, &token);
+    let (id, subscriber, merchant) = create_sub(&env, &client, &token);
 
     // Set a very low credit limit: 1_000_000
     // Current exposure = 0 (prepaid) + AMOUNT (next interval liability for active sub)
     // AMOUNT = 10_000_000 already exceeds 1_000_000, so any deposit fails.
-    client.set_subscriber_credit_limit(&admin, &subscriber, &token, &1_000_000i128);
+    client.set_subscriber_credit_limit(&admin, &merchant, &subscriber, &token, &1_000_000i128, &None::<u64>);
 
     let sub_before = client.get_subscription(&id);
 
@@ -167,7 +167,7 @@ fn test_deposit_rejected_when_credit_limit_exceeded() {
 #[test]
 fn test_deposit_allowed_within_credit_limit() {
     let (env, client, token, admin) = setup();
-    let (id, subscriber, _) = create_sub(&env, &client, &token);
+    let (id, subscriber, merchant) = create_sub(&env, &client, &token);
     let token_client = soroban_sdk::token::Client::new(&env, &token);
 
     // Mint enough tokens to the subscriber
@@ -176,7 +176,7 @@ fn test_deposit_allowed_within_credit_limit() {
     // Set a generous credit limit: 100_000_000
     // Exposure = 0 (prepaid) + AMOUNT (10_000_000) = 10_000_000
     // Depositing PREPAID (50_000_000) → new exposure = 60_000_000 < 100_000_000, OK
-    client.set_subscriber_credit_limit(&admin, &subscriber, &token, &100_000_000i128);
+    client.set_subscriber_credit_limit(&admin, &merchant, &subscriber, &token, &100_000_000i128, &None::<u64>);
 
     let vault_before = token_client.balance(&client.address);
 
@@ -198,7 +198,7 @@ fn test_deposit_allowed_within_credit_limit() {
 #[test]
 fn test_deposit_credit_limit_aggregate_two_subs() {
     let (env, client, token, admin) = setup();
-    let (id1, subscriber, _) = create_sub(&env, &client, &token);
+    let (id1, subscriber, merchant1) = create_sub(&env, &client, &token);
 
     // Create a second subscription for the same subscriber
     let merchant2 = Address::generate(&env);
@@ -216,7 +216,7 @@ fn test_deposit_credit_limit_aggregate_two_subs() {
     // Set credit limit: 15_000_000
     // Two active subs → exposure = 0 + AMOUNT (10M) + 0 + AMOUNT (10M) = 20_000_000
     // Already exceeds 15_000_000, so any deposit should fail
-    client.set_subscriber_credit_limit(&admin, &subscriber, &token, &15_000_000i128);
+    client.set_subscriber_credit_limit(&admin, &merchant1, &subscriber, &token, &15_000_000i128, &None::<u64>);
 
     let sub1_before = client.get_subscription(&id1);
     let sub2_before = client.get_subscription(&id2);

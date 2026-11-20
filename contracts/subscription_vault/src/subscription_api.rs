@@ -98,6 +98,7 @@
 //! |---|---|
 //! | `set_subscriber_credit_limit` | [`crate::subscription::do_set_subscriber_credit_limit`] |
 //! | `get_subscriber_credit_limit` | [`crate::subscription::get_subscriber_credit_limit`] |
+//! | `list_credit_limits` | [`crate::queries::list_credit_limits`] |
 //! | `set_subscriber_active_cap` | [`crate::subscription::do_set_subscriber_active_cap`] |
 //! | `get_subscriber_active_cap` | [`crate::subscription::get_subscriber_active_cap`] |
 //! | `get_subscriber_active_count` | [`crate::subscription::get_subscriber_active_count`] |
@@ -114,6 +115,7 @@
 //! | `get_subscription` | [`crate::queries::get_subscription`] |
 //! | `estimate_topup_for_intervals` | [`crate::queries::estimate_topup_for_intervals`] |
 //! | `get_next_charge_info` | [`crate::queries::get_next_charge_info`] |
+//! | `get_subscriptions_by_subscriber` | [`crate::queries::get_subscriptions_by_subscriber`] |
 //! | `list_subscriptions_by_subscriber` | [`crate::queries::list_subscriptions_by_subscriber`] |
 //! | `get_cap_info` | [`crate::queries::get_cap_info`] |
 //! | `get_token_subscription_count` | [`crate::queries::get_token_subscription_count`] |
@@ -156,8 +158,8 @@ pub use crate::metadata::{
 pub use crate::nonce::get_nonce;
 pub use crate::queries::{
     estimate_topup_for_intervals, get_cap_info, get_next_charge_info, get_subscription,
-    get_subscriptions_by_token, get_token_subscription_count, list_subscriptions_by_subscriber,
-    list_subscriptions_by_token,
+    get_subscriptions_by_subscriber, get_subscriptions_by_token, get_token_subscription_count,
+    list_credit_limits, list_subscriptions_by_subscriber, list_subscriptions_by_token,
     get_plan_max_active_subs,
 };
 pub use crate::subscription::{
