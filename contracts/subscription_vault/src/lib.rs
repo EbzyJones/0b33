@@ -51,6 +51,8 @@ mod safe_math;
 mod subscription;
 mod types;
 mod validation;
+#[cfg(test)]
+mod test_auto_pause;
 
 pub use admin::CONFIG_COOLDOWN_SECS;
 pub use safe_math::*;
