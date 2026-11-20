@@ -658,6 +658,15 @@ pub fn do_create_subscription_with_token(
     // Allocate ID with overflow / limit guard.
     let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
 
+    // Enforce the global total-subscriptions ceiling before allocating an ID.
+    // Bounding the number of allocated IDs prevents unbounded growth of the
+    // contract's persistent storage footprint (see `MAX_TOTAL_SUBSCRIPTIONS`).
+    // This hard cap takes precedence over the per-subscription usage-limits
+    // precheck below, which is moot once no further ID can be allocated.
+    if id >= crate::MAX_TOTAL_SUBSCRIPTIONS {
+        return Err(Error::SubscriptionLimitReached);
+    }
+
     if usage_enabled {
         let limits_key = DataKey::UsageLimits(id);
         if let Some(limits) = env.storage().instance().get::<_, crate::types::UsageLimits>(&limits_key) {
@@ -667,9 +676,6 @@ pub fn do_create_subscription_with_token(
         } else {
             return Err(Error::UsageLimitsRequired);
         }
-    }
-    if id == crate::MAX_SUBSCRIPTION_ID {
-        return Err(Error::SubscriptionLimitReached);
     }
     let next_id = id.checked_add(1).ok_or(Error::SubscriptionLimitReached)?;
 
@@ -3126,7 +3132,16 @@ pub fn do_create_subscription_from_plan(
     enforce_plan_concurrency_limit(env, &subscriber, plan_template_id)?;
 
     let id: u32 = crate::admin::read_config(env, &DataKey::NextId).unwrap_or(0);
-    let next_id = id.checked_add(1).ok_or(Error::Overflow)?;
+
+    // Enforce the global total-subscriptions ceiling before allocating an ID
+    // (see `MAX_TOTAL_SUBSCRIPTIONS`). Aligns `create_subscription_from_plan`
+    // with the `create_subscription` / `create_subscription_with_token` paths;
+    // previously this path returned `Error::Overflow` at `u32::MAX` with no
+    // ceiling check at all.
+    if id >= crate::MAX_TOTAL_SUBSCRIPTIONS {
+        return Err(Error::SubscriptionLimitReached);
+    }
+    let next_id = id.checked_add(1).ok_or(Error::SubscriptionLimitReached)?;
     crate::admin::write_config(env, &DataKey::NextId, &next_id);
 
     let resolved_cap = resolve_cap(env, &plan.merchant, plan.lifetime_cap);

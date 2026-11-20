@@ -661,8 +661,33 @@ pub use types::{
     SNAPSHOT_FLAG_USAGE_CHARGED, SUB_TTL_EXTEND_TO, SUB_TTL_THRESHOLD,
 };
 
-/// Maximum subscription ID this contract will ever allocate.
+/// Absolute type bound for a subscription ID (`u32::MAX`). Used only as the
+/// overflow backstop in the ID allocator; it is *not* the enforced creation
+/// ceiling — see [`MAX_TOTAL_SUBSCRIPTIONS`].
 pub const MAX_SUBSCRIPTION_ID: u32 = u32::MAX;
+
+/// Hard ceiling on the total number of subscriptions a single contract
+/// instance will ever allocate.
+///
+/// The ID counter (`DataKey::NextId`) doubles as the running total of
+/// subscriptions created (IDs are `0..NextId-1`, never reused). Without an
+/// enforced cap the counter can advance through the entire `u32` space,
+/// letting callers mint up to `u32::MAX` persistent `DataKey::Sub(id)`
+/// records and exhausting the contract's persistent storage budget — once
+/// writes start failing contract-wide the instance is bricked permanently.
+///
+/// `MAX_TOTAL_SUBSCRIPTIONS` is enforced by every subscription-creation path
+/// (`create_subscription`, `create_subscription_with_token`,
+/// `create_subscription_from_plan`): once the counter reaches it, the next
+/// creation returns [`Error::SubscriptionLimitReached`] (#6001) and the
+/// counter is left unchanged.
+///
+/// The value is chosen to be far below `u32::MAX` (so it is a real ceiling,
+/// not the type bound) while comfortably exceeding the largest validated
+/// dataset (the 100k-subscription soak suite) and the documented
+/// high-volume threshold (>5k total subscriptions). Raise it before
+/// upgrading a live contract that legitimately needs more capacity.
+pub const MAX_TOTAL_SUBSCRIPTIONS: u32 = 1_000_000;
 
 /// On-chain storage schema version.
 ///
@@ -3461,7 +3486,7 @@ impl SubscriptionVault {
             .instance()
             .get(&DataKey::NextId)
             .unwrap_or(0u32);
-        if current == MAX_SUBSCRIPTION_ID {
+        if current >= MAX_TOTAL_SUBSCRIPTIONS {
             return Err(Error::SubscriptionLimitReached);
         }
         env.storage()
