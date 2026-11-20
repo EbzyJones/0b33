@@ -300,6 +300,14 @@ fn enforce_plan_concurrency_limit(
     subscriber: &Address,
     plan_template_id: u32,
 ) -> Result<(), Error> {
+    // Ledger-level concurrency note: this check counts currently active
+    // subscriptions from ledger state. Stellar does not serialize unrelated
+    // transactions in the same ledger, so a narrowly simultaneous pair of
+    // creates can observe the same pre-create count. This implementation
+    // currently accepts that read/check race as its trade-off; a future
+    // reservation mechanism would need an atomic, shared plan slot counter
+    // that is incremented before creation and released on cancellation,
+    // failure, or subscription migration.
     let max_active = get_plan_max_active(env, plan_template_id);
     // Zero means "no limit" for this plan.
     if max_active == 0 {
