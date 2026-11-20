@@ -56,6 +56,54 @@ fn test_add_and_remove_guardians() {
 }
 
 #[test]
+fn test_add_guardian_at_max_weight_accepted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    // MAX_GUARDIAN_WEIGHT (10_000) is the ceiling — must be accepted.
+    client.add_guardian(&admin, &guardian, &10_000);
+    assert_eq!(client.get_guardian_weight(&guardian), 10_000);
+}
+
+#[test]
+fn test_add_guardian_above_max_weight_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    // weight = 10_001 exceeds MAX_GUARDIAN_WEIGHT — must return InvalidInput.
+    let result = client.try_add_guardian(&admin, &guardian, &10_001);
+    assert!(
+        result.is_err(),
+        "guardian weight above MAX_GUARDIAN_WEIGHT must be rejected"
+    );
+}
+
+#[test]
+fn test_add_guardian_u32_max_weight_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let (_, client) = init_vault(&env, &admin);
+
+    // u32::MAX must be rejected — it would let one guardian satisfy any quorum alone.
+    let result = client.try_add_guardian(&admin, &guardian, &u32::MAX);
+    assert!(
+        result.is_err(),
+        "guardian weight of u32::MAX must be rejected"
+    );
+}
+
+#[test]
 fn test_submit_proposal_rotate_admin() {
     let env = Env::default();
     env.mock_all_auths();

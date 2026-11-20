@@ -59,6 +59,13 @@ pub const IDEM_HISTORY: u32 = 64;
 /// Maximum fee in basis points (100.00%).
 pub const MAX_FEE_BIPS: i32 = 10000;
 
+/// Maximum voting weight that can be assigned to a single guardian.
+///
+/// Prevents a backdoor guardian from being granted `u32::MAX` weight and
+/// unilaterally satisfying any quorum threshold on their own. The cap keeps
+/// every guardian's influence bounded relative to the rest of the guardian set.
+pub const MAX_GUARDIAN_WEIGHT: u32 = 10_000;
+
 /// Oracle price sanity band: minimum allowed price in basis points relative to reference.
 /// A price below this threshold is considered invalid.
 pub const ORACLE_PRICE_MIN_BPS: u32 = 100; // 1% of reference
