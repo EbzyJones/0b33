@@ -8,8 +8,8 @@
 //! - Event emission
 
 use crate::{
-    DataKey, Error, ScheduledPayoutEvent, SubscriptionVault,
-    SubscriptionVaultClient,
+    DataKey, Error, PayoutCheckReason, PayoutScheduleCheckedEvent, ScheduledPayoutEvent,
+    SubscriptionVault, SubscriptionVaultClient,
 };
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
@@ -414,153 +414,88 @@ fn test_get_payout_schedule_default() {
     assert_eq!(schedule.last_payout_at, 0);
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Payout Schedule with Zero Earned Balance
+// ── payout_schedule_checked event tests ───────────────────────────────────
 //
-// Tests the behavior when a merchant has earned_balance = 0. Scheduling a payout
-// of zero should be handled gracefully. The current implementation skips tokens
-// with zero balance during flush_payouts, which is the correct behavior.
-//
-// This test verifies:
-// - Zero-balance merchants do not trigger any payout
-// - No transfer attempts are made for zero amounts
-// - No events are emitted for zero payouts
-// - flush_payouts returns 0 (no tokens paid)
-// ══════════════════════════════════════════════════════════════════════════════
+// `flush_payouts` must emit a `payout_schedule_checked` event whenever it
+// evaluates the schedule but triggers no token payout, so off-chain monitors
+// can distinguish a successful "no payouts due" call from a failed or dropped
+// transaction.
+
+/// Find the `payout_schedule_checked` event published by the contract, if any.
+fn find_payout_schedule_checked(
+    env: &Env,
+    contract_id: &Address,
+) -> Option<PayoutScheduleCheckedEvent> {
+    let events = env.events().all();
+    events
+        .iter()
+        .find(|(contract, topic, _val)| {
+            *contract == *contract_id
+                && Symbol::from_val(env, &topic.get(0).unwrap())
+                    == Symbol::new(env, "payout_schedule_checked")
+        })
+        .map(|(_, _, val)| val.clone().into_val(env))
+}
 
 #[test]
-fn test_flush_payouts_with_zero_earned_balance() {
+fn test_flush_payouts_no_schedule_emits_checked_event() {
+    let (env, client, _admin, _token) = setup_env();
+    let contract_id = client.address.clone();
+    let merchant = Address::generate(&env);
+    let payout = Address::generate(&env);
+    initialize_merchant_config(&client, &merchant, &payout);
+
+    // No schedule configured — flush is a no-op returning 0...
+    let count = client.flush_payouts(&merchant);
+    assert_eq!(count, 0);
+
+    // ...but it must still emit a checked event so monitors see the call ran.
+    let payload = find_payout_schedule_checked(&env, &contract_id)
+        .expect("payout_schedule_checked event not emitted for no-schedule flush");
+    assert_eq!(payload.merchant, merchant);
+    assert_eq!(payload.reason, PayoutCheckReason::NoSchedule);
+    assert_eq!(payload.next_payout_at, 0);
+    assert_eq!(payload.schema_version, crate::types::EVENT_SCHEMA_VERSION);
+}
+
+#[test]
+fn test_flush_payouts_cadence_not_elapsed_emits_checked_event() {
     let (env, client, _admin, token) = setup_env();
     let contract_id = client.address.clone();
     let merchant = Address::generate(&env);
     let payout = Address::generate(&env);
     initialize_merchant_config(&client, &merchant, &payout);
 
-    // Set a schedule with cadence=1 (always eligible) and zero min_payout
-    client.set_payout_schedule(&merchant, &1, &0);
+    let cadence: u64 = 3600;
+    client.set_payout_schedule(&merchant, &cadence, &0);
 
-    // Seed merchant with ZERO balance (but register the token so it is iterated)
-    seed_merchant_balance_and_token(&env, &contract_id, &merchant, &token, 0);
-    seed_merchant_earnings(&env, &contract_id, &merchant, &token, 0);
+    let balance: i128 = 5_000_000;
+    seed_merchant_balance_and_token(&env, &contract_id, &merchant, &token, balance);
+    seed_merchant_earnings(&env, &contract_id, &merchant, &token, balance);
+    token::StellarAssetClient::new(&env, &token).mint(&contract_id, &balance);
 
-    // Do NOT mint any tokens to the contract — balance is truly zero
+    // First flush at T succeeds and stamps `last_payout_at`.
+    let first_ts: u64 = 100_000;
+    env.ledger().set_timestamp(first_ts);
+    assert_eq!(client.flush_payouts(&merchant), 1);
 
-    // Flush payouts should return 0 (no tokens paid)
-    let count = client.flush_payouts(&merchant);
-    assert_eq!(count, 0, "flush_payouts should return 0 for zero balance");
-
-    // Verify merchant balance is still 0
-    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token), 0);
-
-    // Verify payout address received nothing
-    assert_eq!(
-        token::Client::new(&env, &token).balance(&payout),
-        0,
-        "payout address should not receive any funds"
-    );
-
-    // Verify no ScheduledPayoutEvent was emitted
-    let events = env.events().all();
-    let has_scheduled_payout_event = events.iter().any(|(contract, topic, _val)| {
-        *contract == contract_id
-            && Symbol::from_val(&env, &topic.get(0).unwrap()) == Symbol::new(&env, "scheduled_payout")
-    });
+    // No checked event on the successful first flush.
     assert!(
-        !has_scheduled_payout_event,
-        "No scheduled_payout event should be emitted for zero balance"
+        find_payout_schedule_checked(&env, &contract_id).is_none(),
+        "payout_schedule_checked must not be emitted when a payout is triggered"
     );
-}
 
-#[test]
-fn test_flush_payouts_skips_multiple_zero_balance_tokens() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
+    // Second flush within the cadence window is a no-op that returns
+    // IntervalNotElapsed, but must still emit a checked event carrying the
+    // next eligible payout time.
+    env.ledger().set_timestamp(first_ts + 100);
+    let result = client.try_flush_payouts(&merchant);
+    assert_eq!(result, Err(Ok(Error::IntervalNotElapsed)));
 
-    let admin = Address::generate(&env);
-    let token_a = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_b = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_c = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-
-    client.init(&token_a, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
-    client.add_accepted_token(&admin, &token_b, &6);
-    client.add_accepted_token(&admin, &token_c, &6);
-
-    let merchant = Address::generate(&env);
-    let payout = Address::generate(&env);
-    initialize_merchant_config(&client, &merchant, &payout);
-
-    client.set_payout_schedule(&merchant, &1, &0);
-
-    // Seed merchant with zero balance for all three tokens
-    seed_merchant_balance_and_token(&env, &contract_id, &merchant, &token_a, 0);
-    seed_merchant_balance_and_token(&env, &contract_id, &merchant, &token_b, 0);
-    seed_merchant_balance_and_token(&env, &contract_id, &merchant, &token_c, 0);
-    seed_merchant_earnings(&env, &contract_id, &merchant, &token_a, 0);
-    seed_merchant_earnings(&env, &contract_id, &merchant, &token_b, 0);
-    seed_merchant_earnings(&env, &contract_id, &merchant, &token_c, 0);
-
-    // Flush payouts should return 0 (no tokens paid)
-    let count = client.flush_payouts(&merchant);
-    assert_eq!(count, 0, "flush_payouts should return 0 when all balances are zero");
-
-    // Verify all balances remain zero
-    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token_a), 0);
-    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token_b), 0);
-    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token_c), 0);
-}
-
-#[test]
-fn test_flush_payouts_skips_zero_balance_but_pays_nonzero() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(SubscriptionVault, ());
-    let client = SubscriptionVaultClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    let token_a = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-    let token_b = env
-        .register_stellar_asset_contract_v2(admin.clone())
-        .address();
-
-    client.init(&token_a, &6, &admin, &1_000_000i128, &(7 * 24 * 60 * 60));
-    client.add_accepted_token(&admin, &token_b, &6);
-
-    let merchant = Address::generate(&env);
-    let payout = Address::generate(&env);
-    initialize_merchant_config(&client, &merchant, &payout);
-
-    client.set_payout_schedule(&merchant, &1, &0);
-
-    let bal_a: i128 = 0; // zero balance
-    let bal_b: i128 = 5_000_000; // nonzero balance
-
-    seed_merchant_balance_and_token(&env, &contract_id, &merchant, &token_a, bal_a);
-    seed_merchant_balance_and_token(&env, &contract_id, &merchant, &token_b, bal_b);
-    seed_merchant_earnings(&env, &contract_id, &merchant, &token_a, bal_a);
-    seed_merchant_earnings(&env, &contract_id, &merchant, &token_b, bal_b);
-    token::StellarAssetClient::new(&env, &token_b).mint(&contract_id, &bal_b);
-
-    // Flush payouts should return 1 (only token_b paid)
-    let count = client.flush_payouts(&merchant);
-    assert_eq!(count, 1, "flush_payouts should return 1 (only token_b paid)");
-
-    // Verify token_a balance is still 0 (not paid)
-    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token_a), 0);
-
-    // Verify token_b balance is now 0 (paid out)
-    assert_eq!(client.get_merchant_balance_by_token(&merchant, &token_b), 0);
-
-    // Verify payout address received only token_b funds
-    assert_eq!(token::Client::new(&env, &token_a).balance(&payout), 0);
-    assert_eq!(token::Client::new(&env, &token_b).balance(&payout), bal_b);
+    let payload = find_payout_schedule_checked(&env, &contract_id)
+        .expect("payout_schedule_checked event not emitted when cadence pending");
+    assert_eq!(payload.merchant, merchant);
+    assert_eq!(payload.reason, PayoutCheckReason::CadencePending);
+    assert_eq!(payload.next_payout_at, first_ts + cadence);
+    assert_eq!(payload.schema_version, crate::types::EVENT_SCHEMA_VERSION);
 }

@@ -26,7 +26,8 @@ use crate::types::{
     MerchantBalanceSnapshotEvent, MerchantConfig, MerchantConfigInitializedEvent,
     MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent, MerchantMultiSigConfig,
     MerchantPausedEvent, MerchantRevokedEvent, MerchantUnpausedEvent, MerchantVacation,
-    MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule, PlanDeprecatedEvent,
+    MerchantWhitelistModeEvent, MerchantWithdrawalEvent, PayoutSchedule,
+    PayoutScheduleCheckedEvent, PayoutCheckReason, PlanDeprecatedEvent,
     PlanRegisteredEvent, PlanTemplate, ScheduledPayoutEvent, TokenEarnings,
     TokenReconciliationSnapshot, VacationEndedEvent, VacationStartedEvent, MAX_FEE_BIPS,
     is_valid_allowed_operations, OP_CHARGE, TOPIC_WITHDRAWN,
@@ -723,6 +724,15 @@ pub fn set_merchant_config(
     )?;
 
     let key = DataKey::MerchantConfig(merchant.clone());
+
+    // Snapshot old values for the diff event before overwriting.
+    let old = get_merchant_config(env, merchant.clone());
+    let (old_payout_address, old_fee_bips, old_allowed_operations) = match old {
+        Some(ref c) => (c.payout_address.clone(), c.fee_bips, c.allowed_operations),
+        // No prior config: treat the incoming config as both old and new.
+        None => (config.payout_address.clone(), config.fee_bips, config.allowed_operations),
+    };
+
     let timestamp = env.ledger().timestamp();
     let mut updated_config = config;
     updated_config.last_updated = timestamp;
@@ -732,6 +742,9 @@ pub fn set_merchant_config(
         (Symbol::new(env, "merchant_config_set"),),
         MerchantConfigUpdatedEvent {
             merchant: merchant.clone(),
+            old_payout_address,
+            old_fee_bips,
+            old_allowed_operations,
             payout_address: updated_config.payout_address.clone(),
             fee_bips: updated_config.fee_bips,
             allowed_operations: updated_config.allowed_operations,
@@ -1370,18 +1383,31 @@ pub fn do_flush_payouts(env: &Env, merchant: Address, caller: Address) -> Result
     require_merchant_approved(env, &merchant)?;
     
     let schedule = get_payout_schedule(env, &merchant);
+    let now = env.ledger().timestamp();
 
-    // No schedule configured — nothing to do.
+    // No schedule configured — nothing to do.  Emit a check event so off-chain
+    // monitors can tell a successful no-op from a failed or dropped call.
     if schedule.cadence_seconds == 0 && schedule.min_payout == 0 {
+        emit_payout_schedule_checked(env, &merchant, PayoutCheckReason::NoSchedule, 0, now);
         return Ok(0);
     }
-
-    let now = env.ledger().timestamp();
 
     // Enforce cadence: enough time since last flush?
     if schedule.last_payout_at > 0
         && now.saturating_sub(schedule.last_payout_at) < schedule.cadence_seconds
     {
+        // Cadence has not elapsed — emit a check event carrying the next
+        // eligible payout time so monitors know when to retry.
+        let next_payout_at = schedule
+            .last_payout_at
+            .saturating_add(schedule.cadence_seconds);
+        emit_payout_schedule_checked(
+            env,
+            &merchant,
+            PayoutCheckReason::CadencePending,
+            next_payout_at,
+            now,
+        );
         return Err(Error::IntervalNotElapsed);
     }
 
@@ -1421,42 +1447,31 @@ pub fn do_flush_payouts(env: &Env, merchant: Address, caller: Address) -> Result
     Ok(tokens_paid)
 }
 
-/// Update a subset of the merchant's configuration fields.
+/// Emit a `payout_schedule_checked` event for a no-op payout evaluation.
 ///
-/// Every argument is `Option`; `None` means "leave this field alone".
-///
-/// # Field mutability
-///
-/// | Field | Mutable while subscriptions are `Active`? |
-/// |-------|------------------------------------------|
-/// | `payout_address` | Yes |
-/// | `fee_bips` | **No** — see below |
-/// | `allowed_operations` | **No** — see below |
-/// | `is_active` | Yes |
-/// | `fee_address` | Yes |
-/// | `redirect_url` | Yes |
-/// | `is_paused` | Yes |
-///
-/// `fee_bips` and `allowed_operations` are **protected**: changing either
-/// while the merchant has at least one `Active` subscription returns
-/// `Error::InvalidStatusTransition` (code `4001`) and writes nothing. The
-/// rationale is consent, not convenience — those two fields change the terms
-/// of agreements subscribers entered while their subscriptions were running:
-/// a `fee_bips` change retroactively re-prices every live subscription, and
-/// clearing `OP_WITHDRAW` can strand merchant earnings behind subscriptions
-/// that can no longer release them.
-///
-/// Pause the subscriptions first, change the field, then resume. Only
-/// `Active` counts, so a merchant whose subscriptions are all `Paused`,
-/// `GracePeriod` or `Cancelled` can always change protected fields — which is
-/// precisely when it is safe to do so.
-///
-/// # Other errors
-///
-/// * `NotFound` — no config record for this merchant.
-/// * `InvalidFeeBips` — `fee_bips > MAX_FEE_BIPS`.
-/// * `InvalidOperations` — unknown bits in `allowed_operations`.
-/// * `MustAllowChargeOperation` — `OP_CHARGE` cleared from `allowed_operations`.
+/// This is the positive on-chain signal that distinguishes a successful
+/// "no payouts due" `flush_payouts` call from a failed or silently dropped
+/// transaction.  `next_payout_at` is the next eligible payout timestamp, or `0`
+/// when no schedule is configured.
+fn emit_payout_schedule_checked(
+    env: &Env,
+    merchant: &Address,
+    reason: PayoutCheckReason,
+    next_payout_at: u64,
+    now: u64,
+) {
+    env.events().publish(
+        (Symbol::new(env, "payout_schedule_checked"), merchant.clone()),
+        PayoutScheduleCheckedEvent {
+            merchant: merchant.clone(),
+            reason,
+            next_payout_at,
+            timestamp: now,
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+        },
+    );
+}
+
 pub fn update_merchant_config(
     env: &Env,
     merchant: Address,
@@ -1472,6 +1487,11 @@ pub fn update_merchant_config(
 
     let key = DataKey::MerchantConfig(merchant.clone());
     let mut config: MerchantConfig = env.storage().instance().get(&key).ok_or(Error::NotFound)?;
+
+    // Snapshot old values for the diff event before any field is mutated.
+    let old_payout_address = config.payout_address.clone();
+    let old_fee_bips = config.fee_bips;
+    let old_allowed_operations = config.allowed_operations;
 
     // Protected-field guard. Runs before any write so a rejection is a no-op.
     reject_protected_field_change(env, &merchant, &new_fee_bips, &new_allowed_operations)?;
@@ -1514,6 +1534,9 @@ pub fn update_merchant_config(
         (soroban_sdk::Symbol::new(env, "merchant_config_updated"),),
         MerchantConfigUpdatedEvent {
             merchant: merchant.clone(),
+            old_payout_address,
+            old_fee_bips,
+            old_allowed_operations,
             payout_address: config.payout_address.clone(),
             fee_bips: config.fee_bips,
             allowed_operations: config.allowed_operations,

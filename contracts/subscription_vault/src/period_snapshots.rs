@@ -85,6 +85,11 @@ pub fn write_period_snapshot(env: &Env, mut snapshot: BillingPeriodSnapshot) -> 
             .persistent()
             .get(&idx_key)
             .unwrap_or_else(|| Vec::new(env));
+        // Evict the oldest entry when inserting would push the count above the
+        // cap (i.e. current length == cap means post-insert length == cap + 1).
+        if idx.len() >= MAX_BILLING_PERIOD_SNAPSHOTS_PER_SUBSCRIPTION {
+            idx.remove(0);
+        }
         idx.push_back(snapshot.period_index);
 
         while idx.len() > MAX_BILLING_PERIOD_SNAPSHOTS_PER_SUBSCRIPTION {

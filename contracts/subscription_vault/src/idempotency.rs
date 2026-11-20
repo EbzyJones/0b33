@@ -30,7 +30,12 @@ pub(crate) const IDEM_HISTORY: u32 = 64;
 /// would require 64 charges within the TTL window to succeed — a scenario
 /// that cannot happen under normal subscription billing frequencies.
 pub(crate) const IDEM_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
-const IDEM_TTL_KEY: &str = "idem_ttl";
+
+/// Maximum allowed idempotency TTL (365 days).
+///
+/// Prevents misconfiguration that would effectively make the ring buffer
+/// permanent and exhaust slots for long-lived subscriptions.
+pub(crate) const IDEM_TTL_MAX_SECS: u64 = 365 * 24 * 60 * 60;
 
 /// Ring buffer of recently seen idempotency-key hashes with insertion timestamps.
 ///
@@ -44,22 +49,39 @@ pub(crate) struct IdemRingBuffer {
 }
 
 /// Return the configured idempotency-key lifetime, defaulting to seven days.
+///
+/// Reads from persistent storage via `DataKey::IdempotencyTtlSecs` (the same
+/// `read_config` path used by `GracePeriod`, `DisputeWindowSecs`, etc.).
 pub fn get_ttl_secs(env: &Env) -> u64 {
-    env.storage()
-        .instance()
-        .get(&Symbol::new(env, IDEM_TTL_KEY))
+    crate::admin::read_config::<u64>(env, &DataKey::IdempotencyTtlSecs)
         .unwrap_or(IDEM_TTL_SECS)
 }
 
-/// Set the contract-wide idempotency-key lifetime.
-pub fn set_ttl_secs(env: &Env, ttl_secs: u64) -> Result<(), Error> {
-    if ttl_secs == 0 {
+/// Apply a validated idempotency-TTL value.
+///
+/// Used by both the direct admin path (`set_idempotency_ttl` in `lib.rs`,
+/// which enforces the cooldown before calling here) and the governance bypass
+/// path (`ProposalKind::SetIdempotencyTtl` in `governance.rs`, which calls
+/// here directly, intentionally skipping the cooldown).
+///
+/// Emits [`IdemTtlUpdatedEvent`] on success.
+pub fn apply_ttl_secs(env: &Env, admin: &soroban_sdk::Address, ttl_secs: u64) -> Result<(), Error> {
+    if ttl_secs == 0 || ttl_secs > IDEM_TTL_MAX_SECS {
         return Err(Error::InvalidInput);
     }
-
-    env.storage()
-        .instance()
-        .set(&Symbol::new(env, IDEM_TTL_KEY), &ttl_secs);
+    let old_ttl_secs = get_ttl_secs(env);
+    crate::admin::write_config(env, &DataKey::IdempotencyTtlSecs, &ttl_secs);
+    env.events().publish(
+        (Symbol::new(env, "idem_ttl_updated"),),
+        crate::types::IdemTtlUpdatedEvent {
+            admin: admin.clone(),
+            old_ttl_secs,
+            new_ttl_secs: ttl_secs,
+            timestamp: env.ledger().timestamp(),
+            schema_version: crate::types::EVENT_SCHEMA_VERSION,
+            contract_id: env.current_contract_address(),
+        },
+    );
     Ok(())
 }
 

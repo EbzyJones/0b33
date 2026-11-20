@@ -124,10 +124,16 @@ fn validate_set_protocol_fee_proposal(
 
 /// Validate proposal configuration for `SetDisputeWindow` kind.
 ///
-/// Ensures:
-/// - `target3` (window_secs) is not zero and fits in u32 max.
+/// Ensures `target3` (window_secs) satisfies the same bounds enforced by
+/// `apply_dispute_window_secs`: at least `MIN_DISPUTE_WINDOW_SECS` and at most
+/// `MAX_DISPUTE_WINDOW_SECS`. Rejecting out-of-range proposals at submission
+/// time saves the gas that would otherwise be spent storing and voting on a
+/// proposal that can never execute.
 fn validate_set_dispute_window_proposal(window_secs: u32) -> Result<(), Error> {
-    if window_secs == 0 || window_secs == u32::MAX {
+    let secs = u64::from(window_secs);
+    if secs < crate::types::MIN_DISPUTE_WINDOW_SECS
+        || secs > crate::types::MAX_DISPUTE_WINDOW_SECS
+    {
         return Err(Error::InvalidInput);
     }
     Ok(())
@@ -202,9 +208,6 @@ pub fn do_submit_proposal(
     eta: u64,
 ) -> Result<u64, Error> {
     if quorum_bps > 10_000 {
-        return Err(Error::InvalidInput);
-    }
-    if kind == ProposalKind::SetDisputeWindow && target3 == 0 {
         return Err(Error::InvalidInput);
     }
 
@@ -466,6 +469,11 @@ pub fn do_execute_proposal(env: &Env, proposal_id: u64) -> Result<(), Error> {
             // SetOracleConfig: oracle address in target.
             // Update oracle address via governance, bypassing the cooldown.
             crate::oracle::set_oracle_address(env, proposal.target)?;
+        }
+        ProposalKind::SetIdempotencyTtl => {
+            // target3 carries the new TTL in seconds.
+            // Governance proposals intentionally bypass the admin cooldown.
+            crate::idempotency::apply_ttl_secs(env, &proposal.proposer, u64::from(proposal.target3))?;
         }
     }
 

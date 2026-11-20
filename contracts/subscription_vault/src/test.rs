@@ -1193,6 +1193,60 @@ fn test_charge_subscription_insufficient_balance_returns_error() {
 // -- ID limit test ------------------------------------------------------------
 
 #[test]
+fn test_charge_zero_amount_subscription_returns_invalid_amount() {
+    // A subscription whose amount == 0 must never produce a charged event.
+    // charge_one must reject it with InvalidAmount before any accounting runs.
+    let test_env = TestEnv::default();
+    test_env.set_timestamp(T0);
+
+    // Create a subscription with the minimum valid amount, then patch it to 0
+    // in storage to simulate the scenario described in issue #450.
+    let (id, _, _) = fixtures::create_subscription_detailed(
+        &test_env.env,
+        &test_env.client,
+        SubscriptionStatus::Active,
+        AMOUNT,
+        INTERVAL,
+    );
+    // Patch amount to 0 directly in storage.
+    test_env.env.as_contract(&test_env.client.address, || {
+        let mut sub: crate::Subscription = test_env
+            .env
+            .storage()
+            .persistent()
+            .get(&DataKey::Sub(id))
+            .unwrap();
+        sub.amount = 0;
+        test_env
+            .env
+            .storage()
+            .persistent()
+            .set(&DataKey::Sub(id), &sub);
+    });
+    // Fund the prepaid balance so the charge is not blocked by InsufficientBalance.
+    seed_balance(&test_env.env, &test_env.client, id, PREPAID);
+
+    // Advance past the first interval so the interval guard does not fire.
+    test_env
+        .env
+        .ledger()
+        .with_mut(|li| li.timestamp = T0 + INTERVAL + 1);
+
+    let result = test_env
+        .client
+        .try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+
+    // Expect InvalidAmount (#1002).
+    assert_eq!(result, Err(Ok(Error::InvalidAmount)));
+
+    // The subscription balance must not have changed.
+    assert_eq!(
+        test_env.client.get_subscription(&id).prepaid_balance,
+        PREPAID
+    );
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #6001)")]
 fn test_subscription_limit_reached() {
     let test_env = TestEnv::default();

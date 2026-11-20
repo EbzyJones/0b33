@@ -767,9 +767,31 @@ pub use state_machine::{can_transition, get_allowed_transitions, validate_status
 pub use types::{
     AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
     AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent,
-    BatchChargeResponse, BatchChargeResult, BatchSizeWarningEvent, BatchWithdrawResult,
-    BillingChargeKind,
-    BillingCompactedEvent, BillingCompactionSummary,
+    BatchChargeResult, BatchWithdrawResult,
+    BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary, BillingPeriodSnapshot,
+    BillingRetentionConfig, BillingStatement, BillingStatementAggregate, BillingStatementsPage,
+    BulkSubscriptionResult, CapInfo, ChargeExecutionResult, ContractSnapshot, Coupon,
+    DataKey, DisputeEscrowLedger, EmergencyStopDisabledEvent, EmergencyStopEnabledEvent,
+    FullSnapshotPage, FundsDepositedEvent, GlobalCapDefaultUpdatedEvent,
+    LifetimeCapReachedEvent, LifetimeCapUpdatedEvent,
+    MerchantBalanceEntry, MerchantCapDefaultUpdatedEvent, MerchantConfig,
+    MerchantConfigInitializedEvent, MerchantConfigUpdatedEvent, MerchantFeeOverrideSetEvent,
+    MerchantPausedEvent, MerchantTagsUpdatedEvent, MerchantUnpausedEvent,
+    MerchantWithdrawalEvent, MetadataDeletedEvent, MetadataSetEvent, MetadataSetSignedEvent,
+    MigrationExportEvent, NextChargeInfo, OneOffChargedEvent, OracleLivenessEvent,
+    OracleConfig, OracleKind, OraclePrice, OperatorRemovedEvent, OperatorSetEvent,
+    PartialRefundEvent, PayoutSchedule, PlanDeprecatedEvent, PlanRegisteredEvent,
+    PlanTemplate, PlanTemplateUpdatedEvent, PrepaidQueryRequest, PrepaidQueryResult,
+    ProtocolFeeChargedEvent, RateLimitTrippedEvent, ReconciliationProof,
+    ReconciliationSummaryPage, RecoveryEvent, RecoveryReason,
+    ReferralAttributedEvent, PayoutScheduleCheckedEvent, PayoutCheckReason,
+    ScheduledPayoutEvent, SchemaMigratedEvent,
+    SignedMetadataPayload, SnapshotExportedEvent, SnapshotRestoredEvent,
+    SplitChargeEvent, SplitPayees,
+    SubscriberCapReachedEvent, SubscriberCreateWindow, SubscriberWithdrawalEvent,
+    AcceptedToken, AccruedTotals, AdminProposal, AdminProposalCancelledEvent,
+    AdminProposalClaimedEvent, AdminProposalCreatedEvent, AdminRotatedEvent, BatchChargeResult,
+    BatchWithdrawResult, BillingChargeKind, BillingCompactedEvent, BillingCompactionSummary,
     BillingPeriodSnapshot, BillingRetentionConfig, BillingStatement, BillingStatementAggregate,
     BillingStatementsPage, BulkSubscriptionResult, CapInfo, ChargeExecutionResult,
     ChargeFailureEvent, ContractSnapshot, Coupon, DataKey, DiscountAppliedEvent,
@@ -3505,7 +3527,7 @@ impl SubscriptionVault {
     ) -> Result<(), Error> {
         require_admin_auth(&env, &admin)?;
         admin::enforce_config_cooldown(&env, "IdempotencyTtl")?;
-        idempotency::set_ttl_secs(&env, ttl_secs)
+        idempotency::apply_ttl_secs(&env, &admin, ttl_secs)
     }
 
     /// Get the configured idempotency-key lifetime in seconds.

@@ -473,6 +473,46 @@ fn emit_rate_limit_tripped(env: &Env, subscriber: &Address) {
     env.events().publish(topics, event_data);
 }
 
+/// Enforce the per-subscriber subscription creation rate limit.
+///
+/// A subscriber may create at most `SubscriberCreateCap` subscriptions within
+/// any rolling 24-hour window (default: [`DEFAULT_CREATE_CAP`] = 50). The cap
+/// is stored under [`DataKey::SubscriberCreateCap`] and can be adjusted by
+/// the admin via `set_subscriber_create_cap`. Setting it to `0` blocks all
+/// creation attempts entirely (useful for emergency lockdowns).
+///
+/// # Scope and accepted limitation — sybil bypass (issue #449)
+///
+/// This limit is **per subscriber address**. An attacker who controls multiple
+/// wallets can circumvent it by distributing creation calls across addresses.
+/// This is a known, accepted limitation. A global counter is not a sound
+/// alternative for the following reasons:
+///
+/// - **Write contention**: a single instance-storage counter incremented on
+///   every `create_subscription` call becomes a hot-write bottleneck on
+///   Soroban, where every mutation requires a ledger entry read-modify-write.
+///   At meaningful throughput this would throttle legitimate users.
+///
+/// - **Marginal security gain**: every subscription creation already requires
+///   the subscriber to pay (a) Stellar network fees and (b) `min_topup` in the
+///   settlement token before the subscription is usable. A sybil attacker
+///   creating many subscriptions to inflate storage rather than to charge them
+///   still pays `min_topup × n` in real tokens. The economic cost bounds the
+///   practical attack surface without a global counter.
+///
+/// - **Hard global cap already exists**: `MAX_SUBSCRIPTION_ID` (u32::MAX) is
+///   the absolute ceiling on total subscriptions ever created. The contract
+///   will reject new subscriptions once that is reached.
+///
+/// **Recommended operator response** if sybil creation spam is observed:
+/// 1. Raise `min_topup` to increase the economic cost per subscription.
+/// 2. Enable merchant whitelist mode to gate which merchants can receive
+///    subscriptions, limiting the attack surface to approved counterparties.
+/// 3. Use the blocklist to remove known spam addresses after the fact.
+/// 4. Lower `SubscriberCreateCap` to reduce per-address throughput.
+///
+/// A future upgrade may introduce a global ledger-entry-based counter once
+/// Soroban provides cheaper read-only hints for hot contention paths.
 fn enforce_creation_rate_limit(env: &Env, subscriber: &Address) -> Result<(), Error> {
     if let Ok(admin) = crate::admin::do_get_admin(env) {
         if subscriber == &admin {

@@ -112,8 +112,17 @@ pub const BILLING_PERIOD_SNAPSHOT_TTL_THRESHOLD: u32 = 30 * 24 * 60 * 60; // 30 
 /// Target TTL for billing period snapshot entries when extended.
 pub const BILLING_PERIOD_SNAPSHOT_TTL_EXTEND_TO: u32 = 365 * 24 * 60 * 60; // 365 days
 
-/// Maximum number of recent billing period snapshots retained per subscription.
+/// Maximum number of billing period snapshots retained per subscription in the
+/// rolling index. When a new snapshot would push the count above this limit the
+/// oldest entry is evicted, keeping exactly this many snapshots at all times.
 pub const MAX_BILLING_PERIOD_SNAPSHOTS_PER_SUBSCRIPTION: u32 = 365;
+
+/// Replay protection domain for charge_subscription.
+pub const DOMAIN_CHARGE_INTERVAL: u32 = 0;
+/// Replay protection domain for deposit_funds.
+pub const DOMAIN_DEPOSIT_FUNDS: u32 = 1;
+/// Replay protection domain for charge_one_off.
+pub const DOMAIN_CHARGE_ONEOFF: u32 = 2;
 
 /// Number of idempotency slots retained per subscription.
 ///
@@ -381,6 +390,13 @@ pub enum DataKey {
     MerchantSubAccountList(Address),
     /// Configured dispute response window in seconds. Discriminant 84.
     DisputeWindowSecs,
+    /// Admin-configurable idempotency-key lifetime in seconds. Discriminant 85.
+    ///
+    /// When absent, `idempotency::get_ttl_secs` falls back to the compile-time
+    /// constant `IDEM_TTL_SECS` (7 days).  High-frequency deployments can
+    /// lower this value to reclaim ring-buffer slots faster; compliance-
+    /// sensitive deployments can raise it for a longer replay-protection window.
+    IdempotencyTtlSecs,
 }
 
 impl DataKey {
@@ -476,6 +492,7 @@ impl DataKey {
             DataKey::MerchantSubAccount(_, _) => 82,
             DataKey::MerchantSubAccountList(_) => 83,
             DataKey::DisputeWindowSecs => 84,
+            DataKey::IdempotencyTtlSecs => 85,
         }
     }
 
@@ -883,6 +900,20 @@ impl InsufficientBalanceError {
 /// be resolved in favour of the subscriber.
 pub const DISPUTE_WINDOW_SECS: u64 = 14 * 24 * 60 * 60; // 14 days
 
+/// Minimum permitted dispute window (24 hours).
+///
+/// A window shorter than this would let disputes auto-resolve before a
+/// merchant has any practical chance to respond, eliminating subscriber
+/// recourse on-chain.
+pub const MIN_DISPUTE_WINDOW_SECS: u64 = 24 * 60 * 60; // 24 hours
+
+/// Maximum permitted dispute window (90 days).
+///
+/// A window longer than this would trap merchant funds in disputed escrow
+/// for an unreasonable length of time, effectively freezing them forever if
+/// set to a pathological value such as `u64::MAX`.
+pub const MAX_DISPUTE_WINDOW_SECS: u64 = 90 * 24 * 60 * 60; // 90 days
+
 /// Hold window (in seconds) applied to a cancellation refund before the
 /// subscriber can claim it.
 ///
@@ -1213,6 +1244,11 @@ pub enum ProposalKind {
     /// This is a critical security operation requiring governance approval.
     /// Cannot be executed via immediate admin action; must go through quorum voting.
     SetOracleConfig = 8,
+    /// Set the idempotency-key TTL in seconds (`target3`).
+    ///
+    /// Allows governance to override the runtime TTL without being subject to
+    /// the per-key admin cooldown, the same pattern used by `SetDisputeWindow`.
+    SetIdempotencyTtl = 9,
 }
 
 
@@ -2834,6 +2870,37 @@ pub struct ScheduledPayoutEvent {
     pub contract_id: Address,
 }
 
+/// Why a [`PayoutScheduleCheckedEvent`] produced no token payout.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PayoutCheckReason {
+    /// No payout schedule is configured for the merchant.
+    NoSchedule = 0,
+    /// A schedule exists but the configured cadence has not elapsed yet.
+    CadencePending = 1,
+}
+
+/// Emitted by `flush_payouts` whenever the payout schedule is evaluated but no
+/// token payout is actually executed.
+///
+/// This gives off-chain payout monitors a positive on-chain signal that the
+/// call succeeded, so a legitimate "no payouts due" result is distinguishable
+/// from a failed call or a silently dropped transaction.  `next_payout_at` is
+/// the Unix timestamp at which the merchant next becomes eligible for a payout
+/// (`last_payout_at + cadence_seconds`); it is `0` when no schedule is
+/// configured.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PayoutScheduleCheckedEvent {
+    pub merchant: Address,
+    pub reason: PayoutCheckReason,
+    /// Next eligible payout timestamp, or `0` when no schedule is configured.
+    pub next_payout_at: u64,
+    pub timestamp: u64,
+    /// Event schema version for backwards-compatible indexer decoding.
+    pub schema_version: u32,
+}
+
 /// Legacy short topic shared by merchant and subscriber withdrawal events.
 pub const TOPIC_WITHDRAWN: Symbol = symbol_short!("withdrawn");
 
@@ -3503,6 +3570,9 @@ pub struct MerchantConfigInitializedEvent {
 #[derive(Clone, Debug)]
 pub struct MerchantConfigUpdatedEvent {
     pub merchant: Address,
+    pub old_payout_address: Address,
+    pub old_fee_bips: i32,
+    pub old_allowed_operations: i32,
     pub payout_address: Address,
     pub fee_bips: i32,
     pub allowed_operations: i32,
