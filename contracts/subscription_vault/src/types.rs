@@ -522,7 +522,6 @@ impl DataKey {
 /// Canonical set of [`DataKey`] discriminants that legitimately live in
 /// **instance** storage.
 pub const KNOWN_INSTANCE_KEY_DISCRIMINANTS: &[u32] = &[
-    0,  // MerchantSubs(Address)
     1,  // Token
     2,  // Admin
     3,  // MinTopup

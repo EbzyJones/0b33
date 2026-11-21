@@ -408,8 +408,15 @@ fn grouped_discriminants_match_frozen_snapshot() {
 }
 
 #[test]
-fn merchant_group_keys_are_all_instance_tier() {
+fn merchant_group_storage_tiers_are_stable() {
     for key in MerchantKey::ALL {
+        if key.claimed_discriminant() == 0 {
+            assert!(
+                !is_known_instance_discriminant(key.claimed_discriminant()),
+                "MerchantSubs unexpectedly remained an instance key"
+            );
+            continue;
+        }
         assert!(
             is_known_instance_discriminant(key.claimed_discriminant()),
             "{key:?} left the instance-tier allowlist"
