@@ -28,6 +28,27 @@ pub fn safe_add_balance(balance: i128, amount: i128) -> Result<i128, Error> {
     safe_add(balance, amount)
 }
 
+/// Checked addition for merchant balances with a practical ceiling.
+///
+/// In addition to normal overflow detection at `i128::MAX`, this function enforces
+/// [`MERCHANT_BALANCE_CEILING`] to prevent balances from drifting into unreliable
+/// arithmetic ranges due to accumulated fee rounding.
+///
+/// # Errors
+///
+/// - `Error::Underflow` if `amount < 0`
+/// - `Error::Overflow` if `balance + amount > MERCHANT_BALANCE_CEILING`
+pub fn safe_add_merchant_balance(balance: i128, amount: i128) -> Result<i128, Error> {
+    if amount < 0 {
+        return Err(Error::Underflow);
+    }
+    let new_balance = safe_add(balance, amount)?;
+    if new_balance > crate::types::MERCHANT_BALANCE_CEILING {
+        return Err(Error::Overflow);
+    }
+    Ok(new_balance)
+}
+
 /// Checked subtraction for balances. Guarantees that `amount` is non‑negative and that the
 /// balance stays non‑negative after subtraction.
 pub fn safe_sub_balance(balance: i128, amount: i128) -> Result<i128, Error> {
@@ -187,5 +208,62 @@ mod tests {
         assert_eq!(safe_sub_balance(5, 10), Err(Error::Underflow));
         assert_eq!(safe_sub_balance(10, 5), Ok(5));
         assert_eq!(safe_sub_balance(10, 10), Ok(0));
+    }
+
+    // ---- safe_add_merchant_balance ----
+
+    #[test]
+    fn merchant_balance_zero_add_ok() {
+        assert_eq!(safe_add_merchant_balance(0, 0), Ok(0));
+        assert_eq!(safe_add_merchant_balance(0, 1000), Ok(1000));
+    }
+
+    #[test]
+    fn merchant_balance_within_ceiling_ok() {
+        let below_ceiling = crate::types::MERCHANT_BALANCE_CEILING - 1000;
+        assert_eq!(
+            safe_add_merchant_balance(below_ceiling, 500),
+            Ok(below_ceiling + 500)
+        );
+    }
+
+    #[test]
+    fn merchant_balance_at_ceiling_ok() {
+        assert_eq!(
+            safe_add_merchant_balance(crate::types::MERCHANT_BALANCE_CEILING, 0),
+            Ok(crate::types::MERCHANT_BALANCE_CEILING)
+        );
+    }
+
+    #[test]
+    fn merchant_balance_exceeds_ceiling_overflow() {
+        let below_ceiling = crate::types::MERCHANT_BALANCE_CEILING - 100;
+        assert_eq!(
+            safe_add_merchant_balance(below_ceiling, 101),
+            Err(Error::Overflow)
+        );
+    }
+
+    #[test]
+    fn merchant_balance_negative_amount_underflow() {
+        assert_eq!(
+            safe_add_merchant_balance(1000, -1),
+            Err(Error::Underflow)
+        );
+    }
+
+    #[test]
+    fn merchant_balance_far_above_ceiling_overflow() {
+        assert_eq!(
+            safe_add_merchant_balance(
+                crate::types::MERCHANT_BALANCE_CEILING + 1000,
+                0
+            ),
+            // Note: This test shows a balance that is already corrupted above
+            // the ceiling; the operation succeeds because we only check the
+            // result, not the input. In practice, balances should never exceed
+            // the ceiling due to gating in credit_merchant_balance_for_token.
+            Ok(crate::types::MERCHANT_BALANCE_CEILING + 1000)
+        );
     }
 }

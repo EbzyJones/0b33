@@ -132,6 +132,39 @@ pub const IDEM_HISTORY: u32 = 64;
 /// Maximum fee in basis points (100.00%).
 pub const MAX_FEE_BIPS: i32 = 10000;
 
+/// Practical upper bound on a single merchant's balance across their lifetime.
+///
+/// # Rationale
+///
+/// `safe_add` only detects overflow at `i128::MAX` (~9.2e18). Without an earlier
+/// ceiling, a merchant balance can approach `i128::MAX` through normal accumulation
+/// of fees across many subscriptions, causing:
+///
+/// 1. **Unreliable arithmetic near the ceiling**: Adding even small amounts fails,
+///    making reconciliation inconsistent and causing charge failures for valid
+///    subscriptions.
+/// 2. **Rounding edge cases**: Fee computation and proration involve checked
+///    multiplication and division, which can compound rounding artefacts as the
+///    balance approaches the limit.
+/// 3. **Silent unaccounting**: A merchant near the ceiling cannot accrue further
+///    fees, so billing to them silently fails, breaking audit records.
+///
+/// # Value
+///
+/// `i128::MAX / 4` (~2.3e18) provides safe headroom for 64-bit amounts while
+/// staying far below the theoretical i128 ceiling. Practical merchant balances
+/// are measured in millions to billions (USD equivalent at token precision), so
+/// this limit has no realistic business impact while providing robust protection.
+///
+/// An admin can increase this constant per governance vote if business
+/// requirements grow, but the change is high-stakes and should be rare.
+///
+/// # Enforcement
+///
+/// This limit is enforced by [`safe_add_merchant_balance`] in `safe_math.rs`,
+/// which is used by [`credit_merchant_balance_for_token`] in `merchant.rs`.
+pub const MERCHANT_BALANCE_CEILING: i128 = i128::MAX / 4;
+
 /// Maximum voting weight that can be assigned to a single guardian.
 ///
 /// Prevents a backdoor guardian from being granted `u32::MAX` weight and

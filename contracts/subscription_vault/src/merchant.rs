@@ -20,7 +20,7 @@
 //! See `docs/reentrancy.md` and `docs/reentrancy_hardening.md` for full details on
 //! the reentrancy threat model and mitigation strategy.
 
-use crate::safe_math::{safe_add, safe_sub};
+use crate::safe_math::{safe_add, safe_add_merchant_balance, safe_sub};
 use crate::types::{
     AccruedTotals, BillingChargeKind, DataKey, Error, MerchantApprovedEvent,
     MerchantBalanceSnapshotEvent, MerchantConfig, MerchantConfigInitializedEvent,
@@ -1060,7 +1060,7 @@ pub fn credit_merchant_balance_for_token(
 
     // ── EFFECTS: balance update
     let current = get_merchant_balance_by_token(env, merchant, token_addr);
-    let new_balance = safe_add(current, amount)?;
+    let new_balance = safe_add_merchant_balance(current, amount)?;
     set_merchant_balance(env, merchant, token_addr, &new_balance);
 
     // ── EFFECTS: earnings update (SINGLE SOURCE OF TRUTH)
