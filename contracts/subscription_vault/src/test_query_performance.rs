@@ -312,7 +312,7 @@ fn test_merchant_cursor_depth_is_bounded_and_exhausts_with_tombstone() {
             ids.push_back(id);
         }
         env.storage()
-            .instance()
+            .persistent()
             .set(&DataKey::MerchantSubs(merchant.clone()), &ids);
     });
 

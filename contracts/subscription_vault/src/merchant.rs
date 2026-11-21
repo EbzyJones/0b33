@@ -34,6 +34,32 @@ use crate::types::{
 };
 use soroban_sdk::{token, Address, Env, String, Symbol, Vec};
 
+/// Read a merchant subscription index without leaving it in instance storage.
+///
+/// Existing deployments may still contain the index under instance storage.
+/// This helper lazily migrates that value to persistent storage and removes
+/// the instance copy on first access.
+pub fn get_merchant_subscription_ids(env: &Env, merchant: &Address) -> Vec<u32> {
+    let key = DataKey::MerchantSubs(merchant.clone());
+    if let Some(ids) = env.storage().persistent().get::<_, Vec<u32>>(&key) {
+        return ids;
+    }
+
+    if let Some(ids) = env.storage().instance().get::<_, Vec<u32>>(&key) {
+        env.storage().persistent().set(&key, &ids);
+        env.storage().instance().remove(&key);
+        ids
+    } else {
+        Vec::new(env)
+    }
+}
+
+pub fn set_merchant_subscription_ids(env: &Env, merchant: &Address, ids: &Vec<u32>) {
+    let key = DataKey::MerchantSubs(merchant.clone());
+    env.storage().persistent().set(&key, ids);
+    env.storage().instance().remove(&key);
+}
+
 /// Upper bound on how many subscription ids `count_active_subscriptions` will
 /// inspect for a single merchant before giving up and failing closed.
 ///
@@ -56,12 +82,7 @@ const MAX_MERCHANT_ACTIVE_SCAN: u32 = 5_000;
 /// than [`MAX_MERCHANT_ACTIVE_SCAN`], so an oversized index blocks the update
 /// rather than silently permitting a protected-field change.
 pub fn count_active_subscriptions(env: &Env, merchant: &Address) -> Result<u32, Error> {
-    let key = DataKey::MerchantSubs(merchant.clone());
-    let ids: Vec<u32> = env
-        .storage()
-        .instance()
-        .get(&key)
-        .unwrap_or_else(|| Vec::new(env));
+    let ids = get_merchant_subscription_ids(env, merchant);
 
     if ids.len() > MAX_MERCHANT_ACTIVE_SCAN {
         return Err(Error::InvalidInput);
@@ -1711,10 +1732,7 @@ pub fn do_rotate_merchant_address(
 
     // ── 5. Migrate MerchantSubs index and rewrite Subscription.merchant ───────
     let subs_key_old = DataKey::MerchantSubs(old_merchant.clone());
-    let subs_key_new = DataKey::MerchantSubs(new_merchant.clone());
-    let sub_ids: soroban_sdk::Vec<u32> = storage
-        .get(&subs_key_old)
-        .unwrap_or(soroban_sdk::Vec::new(env));
+    let sub_ids = get_merchant_subscription_ids(env, &old_merchant);
 
     let mut subscriptions_updated: u32 = 0;
     for sub_id in sub_ids.iter() {
@@ -1734,17 +1752,16 @@ pub fn do_rotate_merchant_address(
 
     if !sub_ids.is_empty() {
         let subs_key_new = DataKey::MerchantSubs(new_merchant.clone());
-        let mut new_sub_ids: soroban_sdk::Vec<u32> = storage
-            .get(&subs_key_new)
-            .unwrap_or(soroban_sdk::Vec::new(env));
+        let mut new_sub_ids = get_merchant_subscription_ids(env, &new_merchant);
         for id in sub_ids.iter() {
             if !new_sub_ids.contains(&id) {
                 new_sub_ids.push_back(id);
             }
         }
-        storage.set(&subs_key_new, &new_sub_ids);
+        set_merchant_subscription_ids(env, &new_merchant, &new_sub_ids);
     }
-    storage.remove(&subs_key_old);
+    env.storage().persistent().remove(&subs_key_old);
+    env.storage().instance().remove(&subs_key_old);
 
     // ── 6. Emit audit event after all state writes are complete ───────────────
     env.events().publish(

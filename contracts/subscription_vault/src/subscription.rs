@@ -766,14 +766,9 @@ pub fn do_create_subscription_with_token(
     increment_subscriber_active_count(env, &subscriber);
 
     // Maintain merchant -> subscription-ID index
-    let merchant_key = DataKey::MerchantSubs(merchant.clone());
-    let mut ids: Vec<u32> = env
-        .storage()
-        .instance()
-        .get(&merchant_key)
-        .unwrap_or(Vec::new(env));
+    let mut ids = crate::merchant::get_merchant_subscription_ids(env, &merchant);
     ids.push_back(id);
-    env.storage().instance().set(&merchant_key, &ids);
+    crate::merchant::set_merchant_subscription_ids(env, &merchant, &ids);
 
     // Maintain token -> subscription-ID index
     let token_key = DataKey::TokenSubs(token.clone());
@@ -1307,13 +1302,11 @@ fn apply_cancellation(
     }
 
     // Remove from index
-    let merchant_key = DataKey::MerchantSubs(sub.merchant.clone());
-    if let Some(mut ids) = env.storage().instance().get::<_, Vec<u32>>(&merchant_key) {
-        if let Some(idx) = ids.iter().position(|x| x == subscription_id) {
-            let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
-            ids.remove(idx_u32);
-            env.storage().instance().set(&merchant_key, &ids);
-        }
+    let mut ids = crate::merchant::get_merchant_subscription_ids(env, &sub.merchant);
+    if let Some(idx) = ids.iter().position(|x| x == subscription_id) {
+        let idx_u32 = idx.try_into().map_err(|_| Error::Overflow)?;
+        ids.remove(idx_u32);
+        crate::merchant::set_merchant_subscription_ids(env, &sub.merchant, &ids);
     }
 
     let token_key = DataKey::TokenSubs(sub.token.clone());
@@ -3660,14 +3653,9 @@ pub fn do_create_subscription_from_plan(
         .set(&sub_plan_storage_key, &plan_template_id);
 
     // Maintain merchant -> subscription-ID index
-    let merchant_key = DataKey::MerchantSubs(plan.merchant.clone());
-    let mut ids: Vec<u32> = env
-        .storage()
-        .instance()
-        .get(&merchant_key)
-        .unwrap_or(Vec::new(env));
+    let mut ids = crate::merchant::get_merchant_subscription_ids(env, &plan.merchant);
     ids.push_back(id);
-    env.storage().instance().set(&merchant_key, &ids);
+    crate::merchant::set_merchant_subscription_ids(env, &plan.merchant, &ids);
 
     // Maintain token -> subscription-ID index
     let token_key = DataKey::TokenSubs(plan.token.clone());
@@ -4196,6 +4184,8 @@ pub fn do_accept_transfer(
         env.storage().instance().remove(&intent_key);
         return Err(Error::TransferIntentExpired);
     }
+
+    crate::blocklist::require_not_blocklisted(env, &to)?;
 
     let mut sub = get_subscription(env, subscription_id)?;
     

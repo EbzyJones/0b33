@@ -205,3 +205,34 @@ fn test_transfer_to_self() {
     let res = client.try_initiate_transfer(&sub_id, &sub1, &sub1, &expires_at);
     assert_eq!(res.unwrap_err().unwrap().to_code(), Error::InvalidTransferTarget.to_code());
 }
+
+#[test]
+fn test_transfer_to_blocklisted_subscriber_is_rejected() {
+    let (env, client, admin, token, merchant, sub1, sub2) = setup();
+
+    let sub_id = client.create_subscription_with_token(
+        &sub1,
+        &merchant,
+        &token,
+        &10_000,
+        &86400,
+        &false,
+        &None,
+        &None,
+    );
+
+    client.add_to_blocklist(
+        &admin,
+        &sub2,
+        &Some(soroban_sdk::String::from_str(&env, "blocked transfer target")),
+    );
+
+    let expires_at = env.ledger().timestamp() + 3600;
+    client.initiate_transfer(&sub_id, &sub1, &sub2, &expires_at);
+
+    assert_eq!(
+        client.try_accept_transfer(&sub_id, &sub2),
+        Err(Ok(Error::SubscriberBlocklisted))
+    );
+    assert_eq!(client.get_subscription(&sub_id).subscriber, sub1);
+}
