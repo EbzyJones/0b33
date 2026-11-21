@@ -127,6 +127,8 @@ pub mod statements {
     };
     use soroban_sdk::{Address, Env, Symbol, Vec};
 
+    pub const MAX_BILLING_STATEMENTS_PAGE: u32 = 500;
+
     /// Appends a new, immutable statement to the subscription's ledger under a
     /// fresh, monotonically-increasing sequence number.
     pub fn append_statement(
@@ -151,7 +153,7 @@ pub mod statements {
             period_start,
             period_end: timestamp,
             amount,
-            merchant,
+            merchant: merchant.clone(),
             token,
             kind,
         };
@@ -172,6 +174,22 @@ pub mod statements {
         // of statements while the immutable records still exist.
         env.storage().persistent().extend_ttl(
             &idx_key,
+            crate::types::BILLING_STATEMENT_TTL_THRESHOLD,
+            crate::types::BILLING_STATEMENT_TTL_EXTEND_TO,
+        );
+
+        let merchant_idx_key = DataKey::BillingStatementsByMerchant(merchant);
+        let mut merchant_ids: Vec<(u32, u32)> = env
+            .storage()
+            .persistent()
+            .get(&merchant_idx_key)
+            .unwrap_or(Vec::new(env));
+        merchant_ids.push_back((subscription_id, next_seq));
+        env.storage()
+            .persistent()
+            .set(&merchant_idx_key, &merchant_ids);
+        env.storage().persistent().extend_ttl(
+            &merchant_idx_key,
             crate::types::BILLING_STATEMENT_TTL_THRESHOLD,
             crate::types::BILLING_STATEMENT_TTL_EXTEND_TO,
         );
@@ -3426,6 +3444,45 @@ impl SubscriptionVault {
             limit,
             newest_first,
         )
+    }
+
+    /// Get a bounded page of billing statements for a merchant.
+    pub fn get_billing_statements_by_merchant(
+        env: Env,
+        merchant: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Result<BillingStatementsPage, Error> {
+        if !(1..=statements::MAX_BILLING_STATEMENTS_PAGE).contains(&limit) {
+            return Err(Error::InvalidInput);
+        }
+
+        let idx_key = DataKey::BillingStatementsByMerchant(merchant);
+        let ids: Vec<(u32, u32)> = env
+            .storage()
+            .persistent()
+            .get(&idx_key)
+            .unwrap_or(Vec::new(env));
+        let total = ids.len();
+        let end = offset.saturating_add(limit).min(total);
+        let mut statements_page: Vec<BillingStatement> = Vec::new(&env);
+
+        let mut i = offset;
+        while i < end {
+            let (subscription_id, sequence) = ids.get(i).unwrap();
+            if let Some(statement) = env.storage().persistent().get::<_, BillingStatement>(
+                &DataKey::BillingStatement(subscription_id, sequence),
+            ) {
+                statements_page.push_back(statement);
+            }
+            i += 1;
+        }
+
+        Ok(BillingStatementsPage {
+            statements: statements_page,
+            next_cursor: if end < total { Some(end) } else { None },
+            total,
+        })
     }
 
     /// Get statements by cursor.
