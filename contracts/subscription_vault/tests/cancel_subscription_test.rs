@@ -112,15 +112,22 @@ fn test_cancel_by_stranger_rejected() {
 }
 
 #[test]
-fn test_cancel_twice_rejected() {
+fn test_cancel_twice_is_idempotent() {
     let (_env, client, sub_id, subscriber, _merchant, _stranger) = setup();
 
     // First cancel succeeds
     client.cancel_subscription(&sub_id, &subscriber);
 
-    // Second cancel should fail
+    // Second cancel is an idempotent no-op: it must not error or mutate state.
     let result = client.try_cancel_subscription(&sub_id, &subscriber);
-    assert_eq!(result, Err(Ok(Error::InvalidStatusTransition)));
+    assert!(
+        result.is_ok(),
+        "cancelling an already-cancelled subscription must succeed without error"
+    );
+
+    let sub = client.get_subscription(&sub_id);
+    assert_eq!(sub.status, SubscriptionStatus::Cancelled);
+    assert_eq!(sub.prepaid_balance, 0);
 }
 
 #[test]
@@ -169,7 +176,7 @@ fn test_cancel_with_zero_balance_refunds_nothing() {
 }
 
 #[test]
-fn test_cancel_refunds_prepaid_balance() {
+fn test_cancel_escrows_prepaid_balance() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -215,14 +222,15 @@ fn test_cancel_refunds_prepaid_balance() {
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
     assert_eq!(sub.prepaid_balance, 0);
 
-    // Subscriber got their refund
-    let subscriber_balance_after = token_client.balance(&subscriber);
-    assert_eq!(
-        subscriber_balance_after,
-        subscriber_balance_before + deposit
-    );
+    // The prepaid balance is moved into the time-locked cancellation escrow,
+    // not refunded synchronously (#604).
+    let escrow = client.get_cancellation_escrow(&sub_id);
+    assert_eq!(escrow.amount, deposit);
 
-    // Vault no longer holds the refunded amount
+    // Subscriber has NOT received the refund yet, and the vault still holds it.
+    let subscriber_balance_after = token_client.balance(&subscriber);
+    assert_eq!(subscriber_balance_after, subscriber_balance_before);
+
     let contract_balance_after = token_client.balance(&contract_id);
-    assert_eq!(contract_balance_after, contract_balance_before - deposit);
+    assert_eq!(contract_balance_after, contract_balance_before);
 }

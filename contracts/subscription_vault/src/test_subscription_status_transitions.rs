@@ -123,6 +123,36 @@ fn test_active_to_paused_to_active() {
     assert_eq!(sub_resumed.prepaid_balance, initial_balance);
 }
 
+/// Resuming from InsufficientBalance must not silently re-enable billing unless
+/// the prepaid balance is now sufficient for at least one interval charge.
+#[test]
+fn test_resume_from_insufficient_balance_requires_sufficient_balance() {
+    let (env, client, token, _) = setup();
+    let (id, subscriber, _) = create_sub(&env, &client);
+
+    let token_admin = soroban_sdk::token::StellarAssetClient::new(&env, &token);
+    token_admin.mint(&subscriber, &AMOUNT - 1);
+    client.deposit_funds(&id, &subscriber, &(AMOUNT - 1), &None::<soroban_sdk::BytesN<32>>);
+
+    client.get_subscription(&id);
+    set_balance(&env, &client, id, AMOUNT - 1);
+    let sub_before = client.get_subscription(&id);
+    assert_eq!(sub_before.status, SubscriptionStatus::Active);
+
+    // Simulate the contract having already transitioned to InsufficientBalance,
+    // while only a partial top-up is available.
+    set_balance(&env, &client, id, AMOUNT - 1);
+    env.as_contract(&client.address, || {
+        let mut sub = env.storage().persistent().get(&DataKey::Sub(id)).unwrap().unwrap();
+        sub.status = SubscriptionStatus::InsufficientBalance;
+        env.storage().persistent().set(&DataKey::Sub(id), &sub);
+    });
+
+    let result = client.try_resume_subscription(&id, &subscriber);
+    assert_eq!(result, Err(Ok(Error::InsufficientBalance)));
+    assert_eq!(client.get_subscription(&id).status, SubscriptionStatus::InsufficientBalance);
+}
+
 // ── Valid transition: Active → Cancelled ─────────────────────────────────────
 
 /// Cancelling an Active subscription moves it to the terminal Cancelled state.
@@ -143,8 +173,10 @@ fn test_active_to_cancelled() {
 
     let sub = client.get_subscription(&id);
     assert_eq!(sub.status, SubscriptionStatus::Cancelled);
-    // Balance is preserved (not burned on cancel — subscriber can still withdraw).
-    assert_eq!(sub.prepaid_balance, balance_before);
+    // Balance is preserved (not burned on cancel) but moved into the time-locked
+    // cancellation escrow (#604) — the subscriber can still withdraw it later.
+    assert_eq!(sub.prepaid_balance, 0);
+    assert_eq!(client.get_cancellation_escrow(&id).amount, balance_before);
 }
 
 // ── Valid transition: Active → InsufficientBalance via underfunded charge ─────
@@ -192,6 +224,24 @@ fn test_active_to_insufficient_balance_via_underfunded_charge() {
     // Security: no funds moved.
     assert_eq!(sub_after.prepaid_balance, 0);
     assert_eq!(sub_after.lifetime_charged, 0);
+}
+
+#[test]
+fn test_next_charge_info_keeps_grace_deadline_after_expiry() {
+    let (env, client, _, _) = setup();
+    let (id, _, _) = create_sub(&env, &client);
+
+    env.ledger()
+        .with_mut(|l| l.timestamp = T0 + INTERVAL + 1);
+    let result = client.try_charge_subscription(&id, &None::<soroban_sdk::BytesN<32>>);
+    assert_eq!(result, Ok(Ok(ChargeExecutionResult::InsufficientBalance)));
+
+    let grace_deadline = T0 + INTERVAL + 1 + GRACE_PERIOD;
+    env.ledger().with_mut(|l| l.timestamp = grace_deadline);
+
+    let info = client.get_next_charge_info(&id);
+    assert_eq!(info.status, SubscriptionStatus::InsufficientBalance);
+    assert_eq!(info.grace_deadline, Some(grace_deadline));
 }
 
 // ── Illegal transition: charge while Cancelled ────────────────────────────────
@@ -377,4 +427,128 @@ fn test_resume_grace_period_with_insufficient_balance_rejected() {
         "status must remain GracePeriod after failed resume"
     );
     assert_eq!(sub_after_failed_resume.prepaid_balance, 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Issue #346 — SubscriptionPausedEvent carries initiator_role
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// When a subscription is paused by the subscriber, the emitted event must
+// carry `PauseInitiatorRole::Subscriber`.  When paused by the merchant it
+// must carry `PauseInitiatorRole::Merchant`.  The bulk-pause path (admin /
+// operator) must carry `PauseInitiatorRole::Admin`.
+//
+// Off-chain indexers must be able to reconstruct who initiated the pause
+// without resolving and comparing both subscriber and merchant addresses.
+
+/// Pausing via the subscriber produces `PauseInitiatorRole::Subscriber` in
+/// the emitted `SubscriptionPausedEvent`.
+#[test]
+fn test_pause_by_subscriber_emits_subscriber_role() {
+    use crate::types::{PauseInitiatorRole, SubscriptionPausedEvent};
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{FromVal, Symbol};
+
+    let (env, client, _, _) = setup();
+    let (id, subscriber, _merchant) = create_sub(&env, &client);
+
+    client.pause_subscription(&id, &subscriber);
+
+    // events() returns (contract_id, topics, data).
+    let mut found = false;
+    for e in env.events().all().iter() {
+        let first_topic_val = e.1.get(0);
+        if let Some(v) = first_topic_val {
+            if Symbol::from_val(&env, &v) == Symbol::new(&env, "sub_paused") {
+                let evt: SubscriptionPausedEvent = FromVal::from_val(&env, &e.2);
+                if evt.subscription_id == id {
+                    assert_eq!(
+                        evt.initiator_role,
+                        PauseInitiatorRole::Subscriber,
+                        "pause by subscriber must carry PauseInitiatorRole::Subscriber"
+                    );
+                    assert_eq!(evt.paused_by, subscriber);
+                    found = true;
+                }
+            }
+        }
+    }
+    assert!(found, "no sub_paused event found for subscription_id={id}");
+}
+
+/// Pausing via the merchant produces `PauseInitiatorRole::Merchant` in
+/// the emitted `SubscriptionPausedEvent`.
+#[test]
+fn test_pause_by_merchant_emits_merchant_role() {
+    use crate::types::{PauseInitiatorRole, SubscriptionPausedEvent};
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{FromVal, Symbol};
+
+    let (env, client, _, _) = setup();
+    let (id, _subscriber, merchant) = create_sub(&env, &client);
+
+    client.pause_subscription(&id, &merchant);
+
+    let mut found = false;
+    for e in env.events().all().iter() {
+        let first_topic_val = e.1.get(0);
+        if let Some(v) = first_topic_val {
+            if Symbol::from_val(&env, &v) == Symbol::new(&env, "sub_paused") {
+                let evt: SubscriptionPausedEvent = FromVal::from_val(&env, &e.2);
+                if evt.subscription_id == id {
+                    assert_eq!(
+                        evt.initiator_role,
+                        PauseInitiatorRole::Merchant,
+                        "pause by merchant must carry PauseInitiatorRole::Merchant"
+                    );
+                    assert_eq!(evt.paused_by, merchant);
+                    found = true;
+                }
+            }
+        }
+    }
+    assert!(found, "no sub_paused event found for subscription_id={id}");
+}
+
+/// Bulk-pause (admin/operator path) produces `PauseInitiatorRole::Admin`.
+#[test]
+fn test_bulk_pause_by_admin_emits_admin_role() {
+    use crate::types::{PauseInitiatorRole, SubscriptionPausedEvent};
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::{FromVal, Symbol, Vec};
+
+    let (env, client, _, admin) = setup();
+    let (id, _subscriber, _merchant) = create_sub(&env, &client);
+
+    client.bulk_pause_subscriptions(&admin, &Vec::from_array(&env, [id]), &0u64);
+
+    let mut found = false;
+    for e in env.events().all().iter() {
+        let first_topic_val = e.1.get(0);
+        if let Some(v) = first_topic_val {
+            if Symbol::from_val(&env, &v) == Symbol::new(&env, "sub_paused") {
+                let evt: SubscriptionPausedEvent = FromVal::from_val(&env, &e.2);
+                if evt.subscription_id == id {
+                    assert_eq!(
+                        evt.initiator_role,
+                        PauseInitiatorRole::Admin,
+                        "bulk pause by admin must carry PauseInitiatorRole::Admin"
+                    );
+                    found = true;
+                }
+            }
+        }
+    }
+    assert!(found, "no sub_paused event found for subscription_id={id}");
+}
+
+/// `SUBSCRIPTION_PAUSED_EVENT_SCHEMA_VERSION` is 4 (bumped when initiator_role
+/// was added), and both the `apply_pause` and `lib.rs` emit paths use it.
+#[test]
+fn test_pause_event_schema_version_is_current() {
+    assert_eq!(
+        crate::types::SUBSCRIPTION_PAUSED_EVENT_SCHEMA_VERSION,
+        4,
+        "SUBSCRIPTION_PAUSED_EVENT_SCHEMA_VERSION must be 4 after adding initiator_role"
+    );
 }

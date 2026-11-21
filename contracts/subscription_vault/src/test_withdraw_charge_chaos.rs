@@ -93,20 +93,20 @@
 //! catch. See `xfail_refunds_double_count_on_withdraw` below for a minimal
 //! deterministic reproduction.
 //!
-//! **2. `TotalAccounted` cannot be asserted at all.**
-//! `src/accounting.rs` is not compiled into the crate — there is no
-//! `mod accounting;` declaration anywhere. `lib.rs:327` defines an inline
-//! `pub mod accounting` whose three functions ignore their arguments and whose
-//! `get_total_accounted` unconditionally returns `0`. Every
+//! **2. `TotalAccounted` is now wired in (previously a no-op stub).**
+//! `src/accounting.rs` is compiled into the crate (`mod accounting;`) and every
 //! `crate::accounting::add_total_accounted` / `sub_total_accounted` call in the
-//! charge and withdraw paths is therefore a no-op against the real
-//! `DataKey::TotalAccounted` storage.
+//! charge and withdraw paths mutates the real `DataKey::TotalAccounted` storage.
 //!
-//! Asserting `get_total_accounted() == expected` would compare `0` to `0` for
-//! the empty case and pass while proving nothing. The `TotalAccounted` half of
-//! the invariant is marked `#[ignore]` in
-//! `ignored_total_accounted_tracks_net_flow` with instructions for re-enabling
-//! it once `accounting.rs` is actually wired in.
+//! `TotalAccounted(token)` is the vault's global custody anchor: it rises on
+//! deposits and falls whenever funds leave the vault (merchant withdrawals,
+//! merchant refunds, subscriber withdrawals). A charge only moves value between
+//! internal buckets (prepaid -> merchant liability), so it leaves the anchor
+//! unchanged.
+//!
+//! `total_accounted_tracks_net_flow_into_and_out_of_the_vault` asserts the
+//! anchor after a charge/withdraw trace: `TotalAccounted == deposits - total
+//! withdrawn`.
 
 #![cfg(test)]
 
@@ -600,35 +600,22 @@ fn xfail_refunds_double_count_on_withdraw() {
     );
 }
 
-// ── TotalAccounted: blocked, not skipped ────────────────────────────────────
+// ── TotalAccounted: net custody flow ────────────────────────────────────────
 
-/// The `TotalAccounted` half of the invariant the task asks for.
+/// The `TotalAccounted` half of the invariant this suite exists for.
 ///
-/// Currently unassertable: `src/accounting.rs` is not compiled into the crate
-/// (no `mod accounting;` exists), and the inline `pub mod accounting` at
-/// `lib.rs:327` stubs all three functions — `add_total_accounted` and
-/// `sub_total_accounted` ignore their arguments, and `get_total_accounted`
-/// always returns `0`. Every accounting call in the charge and withdraw paths
-/// is therefore a no-op against `DataKey::TotalAccounted`.
+/// `TotalAccounted(token)` is the vault's global custody anchor. It is raised by
+/// `deposit_funds` (the only path that pulls tokens in) and lowered by every path
+/// that pushes tokens out — here, merchant withdrawals. Charges merely move value
+/// from a subscriber's prepaid balance to a merchant liability, so they must not
+/// move the anchor at all.
 ///
-/// Writing `assert_eq!(get_total_accounted(..), 0)` here would pass while
-/// proving nothing, which is worse than an explicit gap. To re-enable:
-///
-/// 1. Add `mod accounting;` to `lib.rs` and delete the inline stub module.
-/// 2. Drop the `#[ignore]` and the `return` below.
-///
-/// The assertion body is written out so it is ready to run.
+/// `setup(3)` deposits `deposit_for(3)` up front, so after any charge/withdraw
+/// trace the anchor must equal `deposits - total withdrawn`.
 #[test]
-#[ignore = "blocked: src/accounting.rs is not wired into the crate; lib.rs:327 stubs it to a no-op"]
-fn ignored_total_accounted_tracks_net_flow() {
+fn total_accounted_tracks_net_flow_into_and_out_of_the_vault() {
     let mut h = setup(3);
-
-    // Guard: while the stub is in place `get_total_accounted` is hardwired to 0,
-    // so every assertion below would pass vacuously. Delete this block on
-    // purpose when wiring `accounting.rs` in.
-    if crate::accounting::get_total_accounted(&h.env, &h.token) == 0 {
-        return;
-    }
+    let deposits = deposit_for(3);
 
     let mut realised = Realised::default();
 
@@ -642,11 +629,10 @@ fn ignored_total_accounted_tracks_net_flow() {
         h.apply(op, &mut realised);
     }
 
-    // TotalAccounted is a global anchor: credits raise it, withdrawals and
-    // refunds lower it. After a full drain the merchant's contribution is zero.
     assert_eq!(
-        crate::accounting::get_total_accounted(&h.env, &h.token),
-        realised.credited - realised.withdrawn,
-        "TotalAccounted must equal net credited-minus-withdrawn flow"
+        crate::accounting::get_total_accounted(&h.env, &h.token).unwrap(),
+        deposits - realised.withdrawn,
+        "TotalAccounted must equal deposits minus funds withdrawn from the vault; \
+         charges move value between internal buckets and must not touch it"
     );
 }

@@ -1,6 +1,6 @@
 # Error Codes and Handling
 
-This document defines the canonical error taxonomy for `subscription_vault` and the stable numeric codes clients should use for UX, retry policy, alerting, and backend integration.
+ This document defines the canonical error taxonomy for `subscription_vault` and the stable numeric codes clients should use for UX, retry policy, alerting, and backend integration.
 
 > [!IMPORTANT]
 > Breaking changes
@@ -41,12 +41,13 @@ This document defines the canonical error taxonomy for `subscription_vault` and 
 | 4002 | `NotActive` | State transition | Operation requires an active subscription state. | Refresh state; do not blindly retry. |
 | 4003 | `SubscriptionExpired` | State transition | Subscription has expired. | Stop retrying mutating operations on this subscription. |
 | 4004 | `IntervalNotElapsed` | State transition | Interval charge attempted too early. | Safe to retry after the next eligible timestamp only. |
-| 4005 | `Replay` | State transition | Duplicate charge/recovery/reference was detected. | Treat as idempotent duplicate. Do not retry with a new key for the same action. |
+| 4005 | `Replay` | State transition | A period, recovery, or reference replay guard rejected the operation. | Reconcile contract state and the local request record; do not treat the error alone as proof of success. |
 | 4006 | `RecoveryNotAllowed` | State transition | Recovery flow is not allowed in the current context. | Stop and inspect state/policy. |
 | 4007 | `EmergencyStopActive` | State transition | Emergency stop blocks critical mutations. | Pause writes until admin clears emergency stop. |
 | 4008 | `AlreadyInitialized` | State transition | Contract init was called more than once. | Do not retry. |
 | 4009 | `MerchantPaused` | State transition | Merchant-wide pause blocks this action. | Retry only after merchant pause is removed. |
 | 4010 | `Reentrancy` | State transition | Reentrancy guard detected a nested call. | Treat as security failure and investigate immediately. |
+| 4015 | `PlanDeprecated` | State transition | Subscription's plan has been deprecated. | Migrate the subscription to a non-deprecated plan before charging again. |
 | 5001 | `InsufficientBalance` | Accounting | Vault, merchant, or refundable balance is insufficient. | Safe to retry only after balances change. |
 | 5002 | `InsufficientPrepaidBalance` | Accounting | Usage charge exceeds prepaid balance. | Top up first, then retry. |
 | 5003 | `BelowMinimumTopup` | Accounting | Deposit/top-up is below configured threshold. | Increase amount and retry. |
@@ -66,8 +67,16 @@ This document defines the canonical error taxonomy for `subscription_vault` and 
 | 6009 | `UsageCapExceeded` | Limits | Usage cap would be exceeded for the billing period. | Retry only after a new billing period or cap change. |
 | 6010 | `BurstLimitExceeded` | Limits | Usage call arrived too soon after prior call. | Retry after the minimum interval elapses. |
 | 6021 | `MerchantTagLimitExceeded` | Limits | Requested merchant tag set exceeds `MAX_MERCHANT_TAGS`. | Reduce the tag list and retry. |
+| 7001 | `InvalidFeeBips` | Merchant config | Fee basis nots exceed the maximum allowed value (10 000). | Fix `fee_bips` to be in range [0, 10000] and retry. |
+| 7002 | `InvalidOperations` | Merchant config | Allowed-operations bitmask contains invalid `OP_*` bits. | Fix `allowed_operations` to use only valid `OP_*` bits and retry. |
+| 7003 | `MustAllowChargeOperation` | Merchant config | The `OP_CHARGE` bit is not set; merchants must accept charges. | Set the `OP_CHARGE` bit in `allowed_operations` and retry. |
+| 7004 | `MerchantNotApproved` | Merchant config | Merchant is not approved under whitelist mode. | Request approval from the admin or disable whitelist mode. |
 | 7005 | `UnknownMerchantTag` | Merchant config | Tag is not present in the admin-controlled tag allowlist. | Fix input; use only tags returned by `get_tag_allowlist`. |
 | 7006 | `DuplicateMerchantTag` | Merchant config | The same tag appears more than once in one `set_merchant_tags`/`set_tag_allowlist` call. | Remove the repeated tag and retry. |
+| 9001 | `CannotChangeUsageMode` | Subscription update | Attempting to toggle usage_enabled on an existing subscription. | Cannot toggle usage_enabled on an existing subscription; create a new one. |
+| 9101 | `SchemaMigrationDowngrade` | Schema migration | `migrate_config_to_persistent` was called with a stored schema version greater than 3. | The stored version is unchanged; use a binary and migration path compatible with the on-chain schema. Do not lower the schema marker manually. |
+| 9102 | `SchemaVersionMismatch` | Schema migration | `migrate` was called with a stored schema version newer than the binary. | The stored version is unchanged; deploy a binary that supports the on-chain schema. Do not lower the schema marker manually. |
+| 9103 | `SchemaMigrationVerificationFailed` | Schema migration | Post-migration storage invariants did not pass verification. | Treat as terminal; investigate migrated storage before retrying. |
 | 10001 | `DisputeNotFound` | Not found | No dispute for the given ID. | Verify dispute ID. |
 | 10002 | `DisputeAlreadyResolved` | State transition | Dispute has already been resolved. | Do not retry; inspect resolution. |
 | 10003 | `DisputeNotResponded` | State transition | Cannot resolve an unresponded dispute before window elapses. | Retry after admin responds or window elapses. |
@@ -76,11 +85,26 @@ This document defines the canonical error taxonomy for `subscription_vault` and 
 | 10006 | `DisputeAlreadyResponded` | State transition | Dispute is not in `Open` status. | Cannot respond twice. |
 | 12001 | `RenewalWindowClosed` | State transition | Re-enabling auto-renewal after the one-interval renewal window has elapsed. | Cancel and recreate the subscription. Do not retry `set_auto_renew(true)`. |
 
+## Handling `Error::Replay` (4005) in Production Clients
+
+`Error::Replay` is not the response used for a duplicate optional idempotency key. For `charge_subscription`, `deposit_funds`, and `charge_one_off`, resubmitting the same request with the same key during the retention window returns the entrypoint's normal success result without executing the operation again, provided the request passes the entrypoint's authorization and state checks before the idempotency lookup. This supports at-least-once delivery when the original response is lost and the request remains eligible for processing.
+
+An idempotency key is scoped to its operation and subscription, but the contract does not compare the request payload with the payload originally submitted under that key. Reusing a key for a different amount or logical action silently produces the duplicate no-op. Derive and persist a unique key for each logical action, bind it to the request fingerprint off-chain, and retry only the exact same request with that key. The key must still be retained: entries expire after the configured TTL (seven days by default) and the per-subscription history is bounded to 64 entries.
+
+`Error::Replay` (4005) instead reports a replay guard such as an already-charged billing period or a reused recovery/reference. It does not return the prior operation's result and, on its own, does not prove that this particular request succeeded. Do not treat every `Replay` as success or retry with a fresh key. Reconcile the subscription/period state and the durable local job record; mark the job complete only when they establish that the intended logical action was already applied. Otherwise surface the conflict for investigation.
+
+### Recommended at-least-once algorithm
+
+1. Derive a stable key from the logical action, including the operation, subscription, and billing period or request identifier.
+2. Persist the key and request fingerprint before submitting.
+3. If the response is lost or the submission outcome is unknown, resubmit the exact same request with the same key. A recognized key returns normal success without applying the operation again.
+4. If the call returns `Error::Replay`, reconcile state and the local record as described above. Never create a fresh key just to bypass the replay guard.
+
 ## Retry Guidance
 
 - Safe to retry later: `IntervalNotElapsed`, `EmergencyStopActive`, `OraclePriceStale`, `OraclePriceUnavailable`, `RateLimitExceeded`, `BurstLimitExceeded`, `InsufficientBalance`, `InsufficientPrepaidBalance`.
 - Safe only after request changes: `Unauthorized`, `Forbidden`, `InvalidAmount`, `InvalidInput`, `InvalidExportLimit`, `UsageNotEnabled`, `CreditLimitExceeded`, `MaxConcurrentSubscriptionsReached`, `MerchantTagLimitExceeded`, `UnknownMerchantTag`, `DuplicateMerchantTag`.
-- Treat as idempotent duplicate, not a fresh retry: `Replay`.
+- Treat `Replay` as a state conflict requiring reconciliation, not as the success response for an optional idempotency-key retry.
 - Treat as terminal and operator-visible: `Overflow`, `Underflow`, `Reentrancy`, `SubscriptionLimitReached`, `LifetimeCapReached`.
 
 ## Security Notes
@@ -88,7 +112,7 @@ This document defines the canonical error taxonomy for `subscription_vault` and 
 - Errors are intentionally coarse and must not leak sensitive internal balances beyond already-public business state.
 - Charging paths avoid ambiguous reverted errors when a lifetime-cap overrun must persist a cancellation. In those cases the contract may return a semantic success/result while batch interfaces still map the condition to stable code `6002`.
 - Never auto-retry a charge after `Replay`, `LifetimeCapReached`, `NotActive`, or `SubscriptionExpired`.
-- Client payment UX should distinguish �insufficient balance� from �request rejected� to avoid duplicate funding or duplicate charge attempts.
+- Client payment UX should distinguish â€œinsufficient balanceâ€ from â€œrequest rejectedâ€ to avoid duplicate funding or duplicate charge attempts.
 
 ## Source of Truth
 
@@ -150,10 +174,11 @@ Column definitions:
 | 5006 | `OracleNotConfigured` | Accounting | `lib.rs`, `oracle.rs`, `oracle_adapter.rs`, `test.rs`, `test_oracle_liveness.rs` | Admin must call set_oracle_config with a valid oracle address. | OracleConfigUpdatedEvent |
 | 5007 | `OraclePriceUnavailable` | Accounting | `oracle.rs`, `oracle_adapter.rs`, `test.rs` | Retry only after oracle data feed recovers. | OracleChargeResolvedEvent |
 | 5008 | `OraclePriceStale` | Accounting | `oracle.rs`, `oracle_adapter.rs`, `test.rs`, `test_oracle_liveness.rs` | Retry only after a fresh oracle quote is published. | OracleChargeResolvedEvent |
+| 5009 | `AccountingInvariantViolation` | Accounting | `invariants.rs` | Treat as a critical accounting failure: the vault's live token balance is below its accounted total. Pause writes and investigate reconciliation (get_token_reconciliation) before retrying. Emitted by invariants::assert_token_balance_invariant on the charge/withdraw paths; the transaction is reverted (fail-closed). Not user-retriable. | — |
 | 6001 | `SubscriptionLimitReached` | Limits | `lib.rs`, `subscription.rs`, `test.rs` | Treat as terminal capacity failure; no new subscriptions can be created. | — |
 | 6002 | `LifetimeCapReached` | Limits | `admin.rs`, `charge_core.rs`, `subscription.rs`, `test.rs`, `test_emergency_stop_lifetime_caps.rs` | Stop charging; surface terminal state to user. | LifetimeCapReachedEvent |
 | 6003 | `UsageNotEnabled` | Limits | `charge_core.rs`, `subscription.rs`, `test.rs` | Fix request — subscription was created with usage_enabled=false. | — |
-| 6004 | `InvalidExportLimit` | Limits | `lib.rs` | Fix pagination limit to [1, 100]. | — |
+| 6004 | `InvalidExportLimit` | Limits | `lib.rs`, `queries.rs` | Fix pagination limit to [1, 100]. | — |
 | 6005 | `MetadataKeyLimitReached` | Limits | `lib.rs`, `metadata.rs`, `test_metadata_signed.rs` | Delete or update existing keys (up to MAX_METADATA_KEYS) before retrying. | MetadataDeletedEvent |
 | 6006 | `MaxConcurrentSubscriptionsReached` | Limits | `subscription.rs`, `test.rs`, `test_subscriber_active_cap.rs` | Subscriber already at plan concurrency limit; cancel an existing subscription first. | SubscriptionCancelledEvent |
 | 6007 | `CreditLimitExceeded` | Limits | `subscription.rs`, `test.rs`, `test_insufficient_balance.rs` | Reduce deposit / subscription amount or raise limit via set_subscriber_credit_limit. | — |
@@ -174,7 +199,7 @@ Column definitions:
 | 7005 | `UnknownMerchantTag` | Merchant Config | `merchant.rs`, `test_merchant_tags.rs` | Fix input; call get_tag_allowlist and use only listed tags. | — |
 | 7006 | `DuplicateMerchantTag` | Merchant Config | `merchant.rs`, `test_merchant_tags.rs` | Remove the repeated tag from the request and retry. | — |
 | 8001 | `InvalidTokenDecimals` | Token | `admin.rs`, `test_decimal_normalization.rs` | Fix token_decimals; must be in [1, 19]. | — |
-| 8002 | `InvalidToken` | Token | `admin.rs`, `test_decimal_normalization.rs` | Provide an accepted token address from list_accepted_tokens. | — |
+| 8002 | `InvalidToken` | Token | `accounting.rs`, `admin.rs`, `lib.rs`, `queries.rs`, `test_decimal_normalization.rs`, `test_recovery.rs` | Provide an accepted token address from list_accepted_tokens. | — |
 | 9001 | `CannotChangeUsageMode` | Subscription Update | `subscription.rs` | Cannot toggle usage_enabled on an existing subscription; create a new one. | — |
 | 9101 | `SchemaMigrationDowngrade` | Schema Migration | `admin.rs`, `test_config_migration.rs` | Downgrade rejected; deploy the correct binary version. | SchemaMigratedEvent |
 | 9102 | `SchemaVersionMismatch` | Schema Migration | `admin.rs`, `test.rs`, `test_config_migration.rs` | ⚠ No remediation documented — add entry to `REMEDIATION` map in script. | — |
