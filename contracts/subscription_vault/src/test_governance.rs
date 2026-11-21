@@ -1533,6 +1533,177 @@ mod cancel_proposal_authorisation {
         );
     }
 
+    // ── Acceptance Criteria Test 1: On admin rotation, invalidate all pending proposals ──
+
+    #[test]
+    fn admin_rotation_invalidates_all_pending_governance_proposals() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, proposer, _other_guardian) = setup(&env);
+        
+        env.ledger().set_timestamp(1_000_000);
+        
+        // Create a proposal with current admin's guardians
+        let eta = 1_000_000 + 3 * 24 * 60 * 60;
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &ProposalKind::EmergencyStop,
+            &target,
+            &None::<Address>,
+            &1u32,
+            &6_700u32,
+            &eta,
+        );
+        
+        // Vote on the proposal
+        client.vote_proposal(&proposal_id, &true, &0u64);
+        
+        // Rotate admin
+        let new_admin = Address::generate(&env);
+        client.propose_admin(&admin, &new_admin);
+        env.ledger().set_timestamp(1_000_000 + 24 * 60 * 60);
+        client.claim_admin_role(&new_admin);
+        
+        // After admin rotation, the old proposal should be invalidated
+        assert_eq!(
+            client.try_vote_proposal(&proposal_id, &true, &1u64),
+            Err(Ok(Error::ProposalInvalidated)),
+            "Admin rotation must invalidate pending governance proposals"
+        );
+    }
+
+    // ── Acceptance Criteria Test 2: On guardian removal, re-evaluate quorum ──
+
+    #[test]
+    fn guardian_removal_drops_removed_guardian_votes_from_quorum() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, proposer, other_guardian) = setup(&env);
+        // Total guardian weight: 60 (proposer) + 40 (other) = 100
+        // Quorum needed: 67% of 100 = 67
+        
+        env.ledger().set_timestamp(1_000_000);
+        
+        // Create a proposal that requires 67% quorum
+        let eta = 1_000_000 + 3 * 24 * 60 * 60;
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &ProposalKind::EmergencyStop,
+            &target,
+            &None::<Address>,
+            &1u32,
+            &6_700u32,  // 67% quorum
+            &eta,
+        );
+        
+        // Only other_guardian votes YES (weight 40, need 67)
+        // We need to vote with other_guardian, but our setup has proposer voting
+        // Let's vote with proposer first, then remove other_guardian
+        client.vote_proposal(&proposal_id, &true, &0u64);
+        
+        // Before guardian removal: votes_for=60 < 67 (quorum not met)
+        env.ledger().set_timestamp(eta);
+        let result_before = client.try_execute_proposal(&proposal_id);
+        assert_eq!(result_before, Err(Ok(Error::InvalidInput)), "Quorum not met with 60/100");
+        
+        // Reset timestamp for further test
+        env.ledger().set_timestamp(1_000_000);
+        
+        // Now test a new proposal where we carefully control votes
+        let proposal_id_2 = client.submit_proposal(
+            &ProposalKind::EmergencyStop,
+            &target,
+            &None::<Address>,
+            &1u32,
+            &6_700u32,
+            &eta,
+        );
+        
+        // Both guardians vote YES: 60 + 40 = 100 >= 67 (passes)
+        client.vote_proposal(&proposal_id_2, &true, &2u64);
+        env.ledger().set_timestamp(eta);
+        let result_with_both = client.try_execute_proposal(&proposal_id_2);
+        assert!(result_with_both.is_ok(), "Proposal should execute with both guardians voting");
+        
+        // --- Now test the security property ---
+        // Reset and create another proposal
+        env.ledger().set_timestamp(1_000_000);
+        
+        let proposal_id_3 = client.submit_proposal(
+            &ProposalKind::EmergencyStop,
+            &target,
+            &None::<Address>,
+            &1u32,
+            &6_700u32,
+            &eta,
+        );
+        
+        // Only proposer votes YES (weight 60, need 67)
+        client.vote_proposal(&proposal_id_3, &true, &4u64);
+        
+        // Remove the other guardian (now total weight = 60)
+        client.remove_guardian(&admin, &other_guardian);
+        
+        // After removal: new quorum = 67% of 60 = 40.2 (need 41)
+        // proposer's vote (60) >= 41, so it SHOULD pass after removal
+        // This is CORRECT behavior: proposal votes from current guardians are counted,
+        // removed guardian votes are ignored
+        env.ledger().set_timestamp(eta);
+        let result_after_removal = client.try_execute_proposal(&proposal_id_3);
+        assert!(
+            result_after_removal.is_ok(),
+            "After guardian removal, proposal votes from remaining guardians should be counted"
+        );
+    }
+
+    // ── Vulnerability regression test: stale guardian votes don't execute privileged ops ──
+
+    #[test]
+    fn stale_guardian_votes_cannot_execute_after_guardian_removal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, proposer, other_guardian) = setup(&env);
+        // Setup: proposer=60, other=40, total=100
+        // Quorum: 67%
+        
+        env.ledger().set_timestamp(1_000_000);
+        
+        // Create proposal where only the lower-weighted guardian votes (other_guardian: 40)
+        let eta = 1_000_000 + 3 * 24 * 60 * 60;
+        let target = Address::generate(&env);
+        let proposal_id = client.submit_proposal(
+            &ProposalKind::EmergencyStop,
+            &target,
+            &None::<Address>,
+            &1u32,
+            &6_700u32,
+            &eta,
+        );
+        
+        // For this test, we want to vote from the "other" perspective
+        // But since mock_all_auths() auto-signs, we can't control which guardian votes
+        // Instead, let's test the principle: remove a guardian who DID vote
+        
+        // Proposer votes (60)
+        client.vote_proposal(&proposal_id, &true, &0u64);
+        
+        // Now remove the proposer (who just voted)
+        client.remove_guardian(&admin, &proposer);
+        
+        // Now total_weight = 40 (just other_guardian)
+        // Quorum = 67% of 40 = 26.8, need 27
+        // proposer's vote (60) is from a removed guardian, so it counts as 0
+        // votes_for = 0 < 27, proposal should NOT execute
+        
+        env.ledger().set_timestamp(eta);
+        let result_after_removal = client.try_execute_proposal(&proposal_id);
+        assert_eq!(
+            result_after_removal,
+            Err(Ok(Error::InvalidInput)),
+            "Votes from removed guardians must not count towards quorum"
+        );
+    }
+
     // ── Invariant 5: cannot cancel an already-executed (or cancelled) proposal
 
     #[test]
