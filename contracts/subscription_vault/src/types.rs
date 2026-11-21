@@ -935,8 +935,8 @@ pub const MAX_DISPUTE_WINDOW_SECS: u64 = 90 * 24 * 60 * 60; // 90 days
 /// merchant may dispute the cancellation; once it elapses the subscriber claims
 /// the refund via `withdraw_subscriber_funds` or `claim_cancellation_escrow`.
 ///
-/// Value matches the 24-hour hold documented on the `claim_cancellation_escrow`
-/// entrypoint. A withdrawal attempted before `released_at` fails with
+/// The actual hold is the larger of this value and the configured dispute
+/// response window. A withdrawal attempted before `released_at` fails with
 /// [`Error::EscrowNotReleased`].
 ///
 /// Note this is the escrow window, not the dispute window: disputes opened
@@ -945,8 +945,9 @@ pub const CANCELLATION_ESCROW_WINDOW_SECS: u64 = 24 * 60 * 60; // 24 hours
 
 /// Escrow record created when a subscription is cancelled.
 ///
-/// The remaining prepaid balance is held in escrow for
-/// [`CANCELLATION_ESCROW_WINDOW_SECS`] before the subscriber can claim it.
+/// The remaining prepaid balance is held in escrow for at least
+/// [`CANCELLATION_ESCROW_WINDOW_SECS`] and for the configured dispute window
+/// floor before the subscriber can claim it.
 /// The merchant can lodge a dispute during this window to convert the escrow
 /// into a live Dispute record.
 #[contracttype]

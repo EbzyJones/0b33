@@ -188,6 +188,10 @@ pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
     maybe_extend_ttl(env, key, SUB_TTL_THRESHOLD, SUB_TTL_EXTEND_TO);
 }
 
+pub(crate) fn cancellation_escrow_window_secs(env: &Env) -> u64 {
+    CANCELLATION_ESCROW_WINDOW_SECS.max(crate::admin::get_dispute_window_secs(env))
+}
+
 /// Reads a `Subscription` from persistent storage without panicking on
 /// deserialization failure (for example, after an incomplete schema migration).
 ///
@@ -198,8 +202,8 @@ pub(crate) fn extend_subscription_ttl(env: &Env, key: &DataKey) {
 pub(crate) fn try_get_subscription(env: &Env, subscription_id: u32) -> Result<Subscription, Error> {
     let key = DataKey::Sub(subscription_id);
     let raw: Val = env.storage().persistent().get(&key).ok_or(Error::NotFound)?;
-    let sub = Subscription::try_from_val(env, &raw).map_err(|_| Error::NotFound)?;
     extend_subscription_ttl(env, &key);
+    let sub = Subscription::try_from_val(env, &raw).map_err(|_| Error::NotFound)?;
     Ok(sub)
 }
 
@@ -1255,7 +1259,7 @@ fn apply_cancellation(
     if refund_amount > 0 {
         let now = env.ledger().timestamp();
         let released_at = now
-            .checked_add(CANCELLATION_ESCROW_WINDOW_SECS)
+            .checked_add(cancellation_escrow_window_secs(env))
             .ok_or(Error::Overflow)?;
 
         let escrow = CancellationEscrow {

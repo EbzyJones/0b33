@@ -3208,11 +3208,12 @@ impl SubscriptionVault {
 
     // ── Cancellation Refund Escrow (#569) ─────────────────────────────────────
 
-    /// Claim a cancellation escrow refund after the 24-hour hold window elapses.
+    /// Claim a cancellation escrow refund after the hold window elapses.
     ///
     /// When a subscription is cancelled, the remaining prepaid balance is held
-    /// in escrow for [`CANCELLATION_ESCROW_WINDOW_SECS`] so the merchant has an
-    /// opportunity to dispute wrongful terminations. The subscriber calls this
+    /// in escrow for at least [`CANCELLATION_ESCROW_WINDOW_SECS`] (or the
+    /// configured dispute window, if longer) so the merchant has an opportunity
+    /// to dispute wrongful terminations. The subscriber calls this
     /// entrypoint after the window elapses to release the funds.
     ///
     /// # Auth
