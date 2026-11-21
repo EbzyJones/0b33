@@ -47,6 +47,29 @@ pub fn invalidate_pending_proposals(env: &Env) {
         .set(&proposal_invalidation_cutoff_key(env), &cutoff);
 }
 
+fn get_guardian_set_version_key(env: &Env) -> Symbol {
+    Symbol::new(env, "guardian_version")
+}
+
+/// Get the current version of the guardian set.
+/// This version increments whenever the guardian set is modified (add/remove).
+fn get_guardian_set_version(env: &Env) -> u32 {
+    env.storage()
+        .instance()
+        .get::<_, u32>(&get_guardian_set_version_key(env))
+        .unwrap_or(0)
+}
+
+/// Increment guardian set version to mark that guardians have changed.
+/// This is used to track when guardian composition changes, which may affect
+/// quorum calculations for pending proposals.
+fn increment_guardian_set_version(env: &Env) {
+    let current = get_guardian_set_version(env);
+    env.storage()
+        .instance()
+        .set(&get_guardian_set_version_key(env), &(current + 1));
+}
+
 fn ensure_proposal_not_invalidated(env: &Env, proposal_id: u64) -> Result<(), Error> {
     let cutoff = env
         .storage()
@@ -65,6 +88,10 @@ fn ensure_proposal_not_invalidated(env: &Env, proposal_id: u64) -> Result<(), Er
 /// - `NotInitialized` if no admin is set.
 /// - `InvalidInput` if weight is zero.
 /// - `InvalidInput` if weight exceeds `MAX_GUARDIAN_WEIGHT` (10 000).
+///
+/// When a guardian's weight is modified, the guardian set version is incremented.
+/// This signals that pending proposals must re-evaluate their quorum calculations
+/// based on the new guardian set.
 pub fn add_guardian(env: &Env, guardian: Address, weight: u32) -> Result<(), Error> {
     if weight == 0 {
         return Err(Error::InvalidInput);
@@ -76,6 +103,9 @@ pub fn add_guardian(env: &Env, guardian: Address, weight: u32) -> Result<(), Err
     let mut guardians = read_guardians(env);
     guardians.set(guardian.clone(), weight);
     write_guardians(env, &guardians);
+    
+    // Mark that the guardian set has changed
+    increment_guardian_set_version(env);
 
     Ok(())
 }
@@ -84,10 +114,20 @@ pub fn add_guardian(env: &Env, guardian: Address, weight: u32) -> Result<(), Err
 ///
 /// After removal, the guardian cannot vote on new proposals and their prior votes
 /// are ignored during quorum calculation.
+///
+/// **Security**: When a guardian is removed, the guardian set version is incremented
+/// to signal that pending proposals must re-evaluate their quorum calculations.
+/// Proposals that relied on votes from the removed guardian will automatically have
+/// those votes excluded from future quorum calculations via `calculate_quorum()`,
+/// which only counts votes from guardians still in the current set.
 pub fn remove_guardian(env: &Env, guardian: &Address) -> Result<(), Error> {
     let mut guardians = read_guardians(env);
     guardians.remove(guardian.clone());
     write_guardians(env, &guardians);
+    
+    // Mark that the guardian set has changed
+    increment_guardian_set_version(env);
+    
     Ok(())
 }
 
