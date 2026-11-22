@@ -49,13 +49,17 @@ impl<'a> ReentrancyGuard<'a> {
             return Err(Error::Reentrancy);
         }
         
-        // Acquire lock in persistent storage with TTL extension
-        // TTL ensures locks are eventually cleaned up even if drop() fails
+        // Acquire lock in persistent storage.
         env.storage().persistent().set(&key, &true);
         
-        // Extend TTL to 1 hour as safety measure for lock cleanup
-        // Threshold=0 means extend immediately, extend_to=3600 means 1 hour from now
-        env.storage().persistent().extend_ttl(&key, 0, 3600);
+        // **CRITICAL SECURITY**: Extend TTL to the maximum possible value so the
+        // lock can never expire (and be garbage-collected) during a single
+        // transaction, even if a cross-contract call chain stalls or a ledger
+        // closes unexpectedly mid-call. A finite TTL (e.g. 1 hour) could allow
+        // the guard to silently disappear, permitting a second re-entry.
+        // Threshold=0 means extend immediately; extend_to=u32::MAX is a sentinel
+        // that never expires within a single transaction.
+        env.storage().persistent().extend_ttl(&key, 0, u32::MAX);
         
         Ok(Self { env, key })
     }
